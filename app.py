@@ -546,6 +546,7 @@ def api_history():
                 "seed": data.get("seed"),
                 "status": data.get("status"),
                 "audio_seconds": data.get("audio_seconds"),
+                "generation_seconds": data.get("generation_seconds"),
                 "style": (data.get("params") or {}).get("style", "")[:80],
                 "cover": data.get("cover", False),
                 "created": data.get("created"),

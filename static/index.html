@@ -100,6 +100,7 @@
   .hist { display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow: auto; }
   .hist button { text-align: left; width: 100%; padding: 9px 11px; font-size: 12px; }
   .hist .s { color: var(--muted); font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hist .t { color: #6f7787; font-size: 10px; margin-left: 6px; }
   .empty { color: var(--muted); font-size: 12px; }
   footer { color: #565e70; font-size: 11px; padding: 0 22px 30px; max-width: 1400px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
@@ -477,8 +478,9 @@ async function refreshHistory() {
       const b = document.createElement("button");
       b.className = "ghost";
       const secs = r.audio_seconds ? ` \u00b7 ${Math.floor(r.audio_seconds/60)}:${String(Math.round(r.audio_seconds%60)).padStart(2,"0")}` : "";
+      const took = (r.generation_seconds != null) ? `<span class="t" title="generation time">${r.generation_seconds >= 60 ? `${Math.floor(r.generation_seconds/60)}m ${Math.round(r.generation_seconds%60)}s` : `${Math.round(r.generation_seconds)}s`}</span>` : "";
       const tag = r.cover ? "cover" : "song";
-      b.innerHTML = `<b>${tag} \u00b7 seed ${r.seed}</b>${secs}<div class="s">${(r.style || "").replace(/</g,"&lt;")}</div>`;
+      b.innerHTML = `<b>${tag} \u00b7 seed ${r.seed}</b>${secs}${took}<div class="s">${(r.style || "").replace(/</g,"&lt;")}</div>`;
       b.onclick = () => { if (r.audio) window.open(r.audio, "_blank"); };
       box.appendChild(b);
     }
