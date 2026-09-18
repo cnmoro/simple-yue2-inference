@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YuE2 Studio</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e7eaf0; --muted: #8b93a7; --accent: #7c5cff; --accent2: #22c58b;
+    --danger: #ef5b6b; --warn: #e0a83c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(15,17,21,.9);
+    backdrop-filter: blur(8px); z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header .tag { color: var(--muted); font-size: 12px; }
+  #modelState { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+  .dot.on { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+  .dot.load { background: #e0a83c; animation: pulse 1s infinite; }
+  .dot.err { background: var(--danger); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  main { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 18px; padding: 18px 22px 60px; max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .panel + .panel { margin-top: 18px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 14px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 6px; }
+  label:first-child { margin-top: 0; }
+  label .hint { color: #626a7c; font-weight: 400; }
+  input[type=text], input[type=number], textarea, select {
+    width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 9px 11px; font: inherit; font-size: 13px; outline: none;
+  }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  input:disabled, textarea:disabled { opacity: .45; }
+  textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, monospace; }
+  #lyrics { min-height: 220px; }
+  #abc { min-height: 120px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .seed-wrap { display: flex; gap: 6px; }
+  .seed-wrap input { flex: 1; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 14px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: #3d4454; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: #8f74ff; }
+  button.ghost { background: transparent; }
+  button.danger { border-color: #4a2b32; color: var(--danger); }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+  .actions .spacer { flex: 1; }
+  .seg { display: inline-flex; background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 3px; margin-bottom: 18px; }
+  .seg button { border: none; background: transparent; border-radius: 6px; padding: 7px 14px; color: var(--muted); }
+  .seg button.active { background: var(--accent); color: #fff; }
+  .drop {
+    border: 1px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center;
+    color: var(--muted); font-size: 13px; background: var(--panel2); cursor: pointer;
+  }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop b { color: var(--text); }
+  .drop input { display: none; }
+  .file-name { color: var(--accent2); font-size: 12px; margin-top: 6px; min-height: 16px; }
+  details.adv { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+  details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+  details.adv[open] summary { margin-bottom: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--text); }
+  .check input { width: auto; }
+  .check span small { display: block; color: var(--muted); font-size: 11px; }
+  .note { font-size: 11.5px; color: #626a7c; margin-top: 6px; }
+  .note.warn { color: var(--warn); }
+
+  .prog { margin-top: 16px; display: none; }
+  .prog.on { display: block; }
+  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
+  .bar.indet > i { width: 100%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: slide 1.2s infinite; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .prog .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 7px; }
+  .error { color: var(--danger); background: #2a161a; border: 1px solid #4a2b32; border-radius: 8px; padding: 10px 12px; margin-top: 14px; font-size: 13px; display: none; white-space: pre-wrap; }
+  .error.on { display: block; }
+
+  .result { display: none; margin-top: 16px; }
+  .result.on { display: block; }
+  audio { width: 100%; margin-top: 4px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .chip { font-size: 11px; color: var(--muted); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip.alert { color: var(--warn); border-color: #4a3f22; }
+  pre.score { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 240px; overflow: auto; font-size: 12px; white-space: pre; }
+  .hist { display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow: auto; }
+  .hist button { text-align: left; width: 100%; padding: 9px 11px; font-size: 12px; }
+  .hist .s { color: var(--muted); font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .empty { color: var(--muted); font-size: 12px; }
+  footer { color: #565e70; font-size: 11px; padding: 0 22px 30px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>YuE2 Studio</h1>
+  <span class="tag">lyrics + style &rarr; full song</span>
+  <div id="modelState"><span class="dot" id="dot"></span><span id="modelText">checking&hellip;</span></div>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <div class="seg">
+        <button id="segCreate" class="active">Text &rarr; Song</button>
+        <button id="segCover">Audio &rarr; Cover</button>
+      </div>
+
+      <div id="coverBox" style="display:none">
+        <label>Reference audio <span class="hint">— SheetSage2 transcribes the melody, then YuE2 re-sings it</span></label>
+        <label class="drop" id="drop">
+          <input type="file" id="refAudio" accept="audio/*">
+          <span id="dropText">Drop an audio file here or <b>click to browse</b></span>
+          <div class="file-name" id="fileName"></div>
+        </label>
+        <div class="note">Covers use melody-only planning. Keep the new lyrics close to the original phrasing for a closer melodic match.</div>
+      </div>
+
+      <label for="style">Style / tags <span class="hint">— genre, mood, instruments, vocal type, tempo</span></label>
+      <textarea id="style" placeholder="English, jazz-funk, warm lead vocal, Rhodes piano, electric bass, tight drums, 108 BPM"></textarea>
+
+      <label for="lyrics">Lyrics <span class="hint">— use [Verse] / [Chorus] / [Bridge] section markers</span></label>
+      <textarea id="lyrics" placeholder="[Verse]&#10;line one&#10;line two&#10;[Chorus]&#10;the hook goes here"></textarea>
+      <div class="check">
+        <input type="checkbox" id="instrumental">
+        <span>Instrumental <small>No vocals. Best-effort: YuE2 is lyric-first. Describe the instruments in Style; supplying an ABC score gives the strongest control.</small></span>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="cot">Planning mode</label>
+          <select id="cot">
+            <option value="full">full — melody + chords (default)</option>
+            <option value="melody">melody — melody only, good for covers</option>
+            <option value="off">off — no symbolic plan</option>
+          </select>
+        </div>
+        <div>
+          <label for="format">Output</label>
+          <select id="format">
+            <option value="wav">WAV (PCM 16)</option>
+            <option value="flac">FLAC (lossless)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row3">
+        <div>
+          <label for="seed">Seed <span class="hint">blank = random</span></label>
+          <div class="seed-wrap">
+            <input type="number" id="seed" placeholder="random">
+            <button class="ghost" id="randomSeed" title="Randomize">&#8635;</button>
+          </div>
+        </div>
+        <div>
+          <label for="max_duration">Max duration (s) <span class="hint">blank = 360</span></label>
+          <input type="number" id="max_duration" min="1" max="900" step="1" placeholder="360">
+        </div>
+        <div>
+          <label for="cfg">CFG scale <span class="hint">blank = default</span></label>
+          <input type="number" id="cfg" step="0.05" min="0" max="20" placeholder="1.0">
+        </div>
+      </div>
+      <div class="note">Duration is a cap: 25 codec frames per second. The song can end earlier. Max 900 s.</div>
+
+      <div id="abcBox">
+        <label for="abc">ABC score <span class="hint">— optional, requires melody or full mode</span></label>
+        <textarea id="abc" placeholder="X:1&#10;T:...&#10;M:4/4&#10;K:C&#10;..."></textarea>
+      </div>
+
+      <details class="adv">
+        <summary>Advanced sampling</summary>
+        <div class="row3">
+          <div><label for="temperature">Temperature</label><input type="number" id="temperature" step="0.05" placeholder="1.0"></div>
+          <div><label for="top_p">Top-p</label><input type="number" id="top_p" step="0.01" placeholder="0.95"></div>
+          <div><label for="top_k">Top-k</label><input type="number" id="top_k" placeholder="100"></div>
+        </div>
+        <div class="row3">
+          <div><label for="repetition_penalty">Repetition penalty</label><input type="number" id="repetition_penalty" step="0.005" placeholder="1.2"></div>
+          <div><label for="ode_steps">Flow-matching steps</label><input type="number" id="ode_steps" placeholder="32"></div>
+          <div><label for="max_abc_tokens">Max ABC tokens</label><input type="number" id="max_abc_tokens" min="1" max="20000" value="8192"></div>
+        </div>
+        <div class="check">
+          <input type="checkbox" id="fast_decode">
+          <span>Fast decode <small>Skip VAE tiling. Faster, uses more VRAM; may OOM on small cards.</small></span>
+        </div>
+      </details>
+
+      <div class="check" id="planOnlyCheck">
+        <input type="checkbox" id="plan_only">
+        <span>Plan only <small>Return the ABC score without generating audio</small></span>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="generate">Generate</button>
+        <button class="danger ghost" id="cancel" disabled>Cancel</button>
+        <span class="spacer"></span>
+        <button class="ghost" id="preload">Preload model</button>
+      </div>
+
+      <div class="prog" id="prog">
+        <div class="bar" id="bar"><i></i></div>
+        <div class="meta"><span id="stage">&hellip;</span><span id="pmeta"></span></div>
+      </div>
+      <div class="error" id="error"></div>
+    </div>
+
+    <div class="panel result" id="result">
+      <h2>Result</h2>
+      <div class="chips" id="chips"></div>
+      <audio id="player" controls></audio>
+      <div id="scoreWrap" style="display:none">
+        <label id="scoreLabel">ABC score</label>
+        <pre class="score" id="score"></pre>
+      </div>
+      <div class="actions">
+        <button class="ghost" id="download">Download</button>
+        <button class="ghost" id="reuse">Reuse seed</button>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>History</h2>
+      <div class="hist" id="hist"><span class="empty">No songs yet.</span></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  YuE2-3B (CC BY-NC 4.0) &middot; M-A-P &middot; SheetSage2 for covers &middot; runs locally, one job at a time.
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let currentJob = null;
+let pollTimer = null;
+let mode = "create";
+let refFile = null;
+
+function num(id) {
+  const v = $(id).value.trim();
+  return v === "" ? null : Number(v);
+}
+
+function setMode(next) {
+  mode = next;
+  const cover = next === "cover";
+  $("segCreate").classList.toggle("active", !cover);
+  $("segCover").classList.toggle("active", cover);
+  $("coverBox").style.display = cover ? "" : "none";
+  $("abcBox").style.display = cover ? "none" : "";
+  $("planOnlyCheck").style.display = cover ? "none" : "";
+  const off = $("cot").querySelector('option[value="off"]');
+  if (off) off.disabled = cover;
+  if (cover && $("cot").value === "off") $("cot").value = "melody";
+}
+
+function toggleInstrumental() {
+  const on = $("instrumental").checked;
+  $("lyrics").disabled = on;
+  if (on) $("lyrics").dataset.kept = $("lyrics").value;
+  else $("lyrics").value = $("lyrics").dataset.kept || $("lyrics").value;
+}
+
+function showError(msg) {
+  const el = $("error");
+  el.textContent = msg;
+  el.classList.toggle("on", !!msg);
+}
+
+function setProgress(stage, meta, indeterminate) {
+  $("prog").classList.add("on");
+  $("bar").classList.toggle("indet", !!indeterminate);
+  $("stage").textContent = stage;
+  $("pmeta").textContent = meta || "";
+}
+
+function stopPolling() {
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+}
+
+async function refreshState() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+    const dot = $("dot"), txt = $("modelText");
+    dot.className = "dot";
+    if (s.model_error) { dot.classList.add("err"); txt.textContent = "model error"; }
+    else if (s.model_loaded) { dot.classList.add("on"); txt.textContent = "model ready"; }
+    else { txt.textContent = "model not loaded"; }
+  } catch (e) { /* ignore */ }
+}
+
+async function poll(jobId) {
+  try {
+    const j = await (await fetch(`/api/job/${jobId}`)).json();
+    if (j.status === "queued") {
+      setProgress("Queued\u2026", j.elapsed + "s", true);
+    } else if (["loading", "transcribing", "planning", "generating", "synthesizing", "decoding"].includes(j.status)) {
+      const indet = ["loading", "transcribing", "synthesizing", "decoding"].includes(j.status);
+      let meta = j.elapsed + "s";
+      if (j.tokens) meta = j.tokens + " tokens \u00b7 " + meta;
+      setProgress(j.stage, meta, indet);
+    } else if (j.status === "done") {
+      stopPolling();
+      onDone(j);
+      return;
+    } else {
+      stopPolling();
+      $("generate").disabled = false;
+      $("cancel").disabled = true;
+      if (j.status === "cancelled") {
+        $("prog").classList.remove("on");
+        showError("Cancelled.");
+      } else {
+        $("prog").classList.remove("on");
+        showError(j.error || "Generation failed.");
+      }
+      refreshHistory();
+      return;
+    }
+    pollTimer = setTimeout(() => poll(jobId), 1000);
+  } catch (e) {
+    showError("Lost connection to server: " + e);
+    $("generate").disabled = false;
+    $("cancel").disabled = true;
+  }
+}
+
+function onDone(j) {
+  $("generate").disabled = false;
+  $("cancel").disabled = true;
+  $("prog").classList.remove("on");
+  showError("");
+  const res = $("result");
+  res.classList.add("on");
+
+  const chips = [];
+  if (j.cover) chips.push(`<span class="chip">cover</span>`);
+  chips.push(`<span class="chip">seed <b>${j.seed}</b></span>`);
+  if (j.generation_seconds) chips.push(`<span class="chip">took <b>${j.generation_seconds}s</b></span>`);
+  if (j.audio_seconds) chips.push(`<span class="chip">length <b>${Math.floor(j.audio_seconds/60)}:${String(Math.round(j.audio_seconds%60)).padStart(2,"0")}</b></span>`);
+  if (j.tokens) chips.push(`<span class="chip">tokens <b>${j.tokens}</b></span>`);
+  if (j.truncated) chips.push(`<span class="chip alert">truncated (token cap)</span>`);
+  $("chips").innerHTML = chips.join("");
+
+  const player = $("player");
+  if (j.audio) {
+    player.style.display = "";
+    player.src = j.audio + "?t=" + Date.now();
+    $("download").style.display = "";
+    $("download").onclick = () => {
+      const a = document.createElement("a");
+      a.href = j.audio;
+      a.download = `yue2-${j.id}.${j.format || "wav"}`;
+      a.click();
+    };
+  } else {
+    player.style.display = "none";
+    $("download").style.display = "none";
+  }
+
+  if (j.score) {
+    $("scoreWrap").style.display = "";
+    $("scoreLabel").textContent = j.cover ? "Transcribed melody (ABC)" : "ABC score";
+    $("score").textContent = j.score;
+  } else {
+    $("scoreWrap").style.display = "none";
+  }
+  $("reuse").onclick = () => { $("seed").value = j.seed; };
+  refreshHistory();
+}
+
+async function generate() {
+  if (!$("style").value.trim()) { showError("Style is required."); return; }
+  const instrumental = $("instrumental").checked;
+  if (mode === "create" && !instrumental && !$("lyrics").value.trim()) {
+    showError("Add lyrics, or check Instrumental.");
+    return;
+  }
+  if (mode === "cover" && !refFile) { showError("Choose a reference audio file."); return; }
+  showError("");
+  stopPolling();
+  $("result").classList.remove("on");
+  $("generate").disabled = true;
+  $("cancel").disabled = false;
+  setProgress("Submitting\u2026", "", true);
+
+  try {
+    let r;
+    if (mode === "cover") {
+      const fd = new FormData();
+      fd.append("audio", refFile);
+      fd.append("style", $("style").value.trim());
+      fd.append("lyrics", instrumental ? "" : $("lyrics").value);
+      fd.append("cot", $("cot").value);
+      fd.append("format", $("format").value);
+      const seed = num("seed"); if (seed !== null) fd.append("seed", seed);
+      const cfg = num("cfg"); if (cfg !== null) fd.append("cfg_scale", cfg);
+      const dur = num("max_duration"); if (dur !== null) fd.append("max_duration", dur);
+      if ($("fast_decode").checked) fd.append("fast_decode", "true");
+      r = await fetch("/api/cover", { method: "POST", body: fd });
+    } else {
+      const body = {
+        style: $("style").value.trim(),
+        lyrics: instrumental ? "" : $("lyrics").value,
+        cot: $("cot").value,
+        format: $("format").value,
+        plan_only: $("plan_only").checked,
+        seed: num("seed"),
+        cfg_scale: num("cfg"),
+        max_duration: num("max_duration"),
+        abc: $("abc").value.trim() || null,
+        temperature: num("temperature"),
+        top_p: num("top_p"),
+        top_k: num("top_k"),
+        repetition_penalty: num("repetition_penalty"),
+        ode_steps: num("ode_steps"),
+        max_abc_tokens: num("max_abc_tokens"),
+        fast_decode: $("fast_decode").checked,
+      };
+      r = await fetch("/api/generate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    }
+    const { job_id } = await r.json();
+    currentJob = job_id;
+    poll(job_id);
+  } catch (e) {
+    showError(String(e.message || e));
+    $("generate").disabled = false;
+    $("cancel").disabled = true;
+    $("prog").classList.remove("on");
+  }
+}
+
+async function cancel() {
+  if (!currentJob) return;
+  await fetch(`/api/job/${currentJob}/cancel`, { method: "POST" });
+  $("cancel").disabled = true;
+}
+
+async function refreshHistory() {
+  try {
+    const rows = await (await fetch("/api/history")).json();
+    const box = $("hist");
+    if (!rows.length) { box.innerHTML = '<span class="empty">No songs yet.</span>'; return; }
+    box.innerHTML = "";
+    for (const r of rows) {
+      const b = document.createElement("button");
+      b.className = "ghost";
+      const secs = r.audio_seconds ? ` \u00b7 ${Math.floor(r.audio_seconds/60)}:${String(Math.round(r.audio_seconds%60)).padStart(2,"0")}` : "";
+      const tag = r.cover ? "cover" : "song";
+      b.innerHTML = `<b>${tag} \u00b7 seed ${r.seed}</b>${secs}<div class="s">${(r.style || "").replace(/</g,"&lt;")}</div>`;
+      b.onclick = () => { if (r.audio) window.open(r.audio, "_blank"); };
+      box.appendChild(b);
+    }
+  } catch (e) { /* ignore */ }
+}
+
+$("segCreate").onclick = () => setMode("create");
+$("segCover").onclick = () => setMode("cover");
+$("generate").onclick = generate;
+$("cancel").onclick = cancel;
+$("instrumental").onchange = toggleInstrumental;
+$("randomSeed").onclick = () => { $("seed").value = Math.floor(Math.random() * 2147483647); };
+$("preload").onclick = async () => {
+  $("preload").disabled = true;
+  await fetch("/api/load", { method: "POST" });
+  refreshState();
+  setTimeout(() => { $("preload").disabled = false; }, 3000);
+};
+
+const drop = $("drop"), refInput = $("refAudio");
+refInput.onchange = () => {
+  refFile = refInput.files[0] || null;
+  $("fileName").textContent = refFile ? refFile.name : "";
+};
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", (e) => {
+  const f = e.dataTransfer.files[0];
+  if (f) { refFile = f; $("fileName").textContent = f.name; }
+});
+
+refreshState();
+refreshHistory();
+setInterval(refreshState, 5000);
+</script>
+</body>
+</html>
