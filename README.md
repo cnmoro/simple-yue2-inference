@@ -144,6 +144,7 @@ Environment variables:
 | `YUE2_DEVICE` | `cuda` | `cuda`, `mps`, or `cpu` |
 | `YUE2_BACKEND` | `torch`, or `torch-eager` on ROCm | AR backend. The CUDA-graph path needs flash-attention, so ROCm falls back to `torch-eager`. |
 | `YUE2_FFMPEG` | `ffmpeg` from `PATH` | ffmpeg binary used for MP3 export |
+| `YUE2_PROGRESS` | `1` | Show yue2's own stage lines on stderr and feed the webUI's live step counters |
 | `YUE2_HOST` / `YUE2_PORT` | `127.0.0.1` / `7860` | Server bind |
 | `YUE2_PRELOAD` | `0` | Set to `1` to load the model at startup |
 | `YUE2_SHEETSAGE2` | `./models/SheetSage2` | SheetSage2 snapshot (covers) |
@@ -174,9 +175,11 @@ SheetSage2 transcription (~3 GB weights, separate env).
 - **No auth.** Binds to localhost by default. Don't expose it publicly.
 - **Licensing.** Model weights are CC BY-NC 4.0 (research use). The ComfyUI
   repackage is `Comfy-Org/YuE2`; the upstream repo is `m-a-p/YuE2-3B`.
-- Progress for the NAR/VAE stages is indeterminate — the public pipeline API
-  does not expose a per-step callback there, only token counts for the AR
-  stages. Transcription progress is just a window counter on stderr.
+- The UI shows live progress: token count and ETA for the AR stages (the token
+  cap is the target), `steps` for the flow-matching NAR, and `chunks` for the
+  VAE. The NAR/VAE counters come from the pipeline's own progress reporter,
+  which is only wired when progress is enabled (`YUE2_PROGRESS`). Transcription
+  progress is just a window counter on stderr.
 - **Covers do not transfer the voice** and cannot be cancelled mid-transcription;
   the SheetSage2 subprocess runs to completion.
 - **Instrumental is best-effort.** The base checkpoint is lyric-first and has no

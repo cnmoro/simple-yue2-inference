@@ -84,6 +84,8 @@
   .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
   .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
   .bar.indet > i { width: 100%; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: slide 1.2s infinite; }
+  .log { margin-top: 9px; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #6f7787; max-height: 132px; overflow: auto; white-space: pre-wrap; }
+  .log b { color: var(--muted); font-weight: 400; }
   @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
   .prog .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 7px; }
   .error { color: var(--danger); background: #2a161a; border: 1px solid #4a2b32; border-radius: 8px; padding: 10px 12px; margin-top: 14px; font-size: 13px; display: none; white-space: pre-wrap; }
@@ -101,6 +103,11 @@
   .hist button { text-align: left; width: 100%; padding: 9px 11px; font-size: 12px; }
   .hist .s { color: var(--muted); font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hist .t { color: #6f7787; font-size: 10px; margin-left: 6px; }
+  .hist .badge { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; padding: 1px 5px; border-radius: 5px; margin-left: 6px; vertical-align: 1px; }
+  .hist .badge.error { color: var(--danger); border: 1px solid var(--danger); }
+  .hist .badge.cancelled { color: var(--muted); border: 1px solid var(--line); }
+  .hist button:disabled { opacity: .6; cursor: default; }
+  .seg button:disabled { opacity: .45; cursor: not-allowed; }
   .empty { color: var(--muted); font-size: 12px; }
   footer { color: #565e70; font-size: 11px; padding: 0 22px 30px; max-width: 1400px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
@@ -129,6 +136,7 @@
           <div class="file-name" id="fileName"></div>
         </label>
         <div class="note">Covers use melody-only planning. Keep the new lyrics close to the original phrasing for a closer melodic match.</div>
+        <div class="note" id="coverNote"></div>
       </div>
 
       <label for="style">Style / tags <span class="hint">— genre, mood, instruments, vocal type, tempo</span></label>
@@ -221,6 +229,7 @@
       <div class="prog" id="prog">
         <div class="bar" id="bar"><i></i></div>
         <div class="meta"><span id="stage">&hellip;</span><span id="pmeta"></span></div>
+        <div class="log" id="log"></div>
       </div>
       <div class="error" id="error"></div>
     </div>
@@ -265,6 +274,7 @@ function num(id) {
 }
 
 function setMode(next) {
+  if (next === "cover" && $("segCover").disabled) return;
   mode = next;
   const cover = next === "cover";
   $("segCreate").classList.toggle("active", !cover);
@@ -290,11 +300,30 @@ function showError(msg) {
   el.classList.toggle("on", !!msg);
 }
 
-function setProgress(stage, meta, indeterminate) {
+function setProgress(stage, meta, indeterminate, pct) {
   $("prog").classList.add("on");
-  $("bar").classList.toggle("indet", !!indeterminate);
+  const bar = $("bar");
+  const determinate = !indeterminate && pct != null;
+  bar.classList.toggle("indet", !determinate);
+  bar.querySelector("i").style.width = determinate ? Math.max(0, Math.min(100, pct)) + "%" : "";
   $("stage").textContent = stage;
   $("pmeta").textContent = meta || "";
+}
+
+function fmtDur(s, precise) {
+  if (s == null || !isFinite(s)) return "";
+  if (s < 60) return (precise ? Number(s).toFixed(1) : String(Math.round(s))) + "s";
+  return Math.floor(s / 60) + "m " + String(Math.round(s % 60)).padStart(2, "0") + "s";
+}
+
+function renderLog(events) {
+  const box = $("log");
+  if (!events || !events.length) { box.textContent = ""; return; }
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
+  box.innerHTML = events
+    .map((e) => `<b>[${fmtDur(e.t, true)}]</b> ${String(e.text).replace(/</g, "&lt;")}`)
+    .join("\n");
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
 function stopPolling() {
@@ -309,6 +338,11 @@ async function refreshState() {
     if (s.model_error) { dot.classList.add("err"); txt.textContent = "model error"; }
     else if (s.model_loaded) { dot.classList.add("on"); txt.textContent = "model ready"; }
     else { txt.textContent = "model not loaded"; }
+    const coverOk = s.cover_available !== false;
+    $("segCover").disabled = !coverOk;
+    $("segCover").title = coverOk ? "" : "Covers need the SheetSage2 environment, which is not installed on this machine";
+    $("coverNote").textContent = coverOk ? "" : "Covers are unavailable on this install: the SheetSage2 environment is missing (see setup_sheetsage2.sh). Text \u2192 Song still works.";
+    if (!coverOk && mode === "cover") setMode("create");
   } catch (e) { /* ignore */ }
 }
 
@@ -318,12 +352,27 @@ async function poll(jobId) {
     if (j.status === "queued") {
       setProgress("Queued\u2026", j.elapsed + "s", true);
     } else if (["loading", "transcribing", "planning", "generating", "synthesizing", "decoding"].includes(j.status)) {
-      const indet = ["loading", "transcribing", "synthesizing", "decoding"].includes(j.status);
-      let meta = j.elapsed + "s";
-      if (j.tokens) meta = j.tokens + " tokens \u00b7 " + meta;
-      setProgress(j.stage, meta, indet);
+      const sub = j.sub_progress;
+      let stage = j.stage;
+      if (sub && sub.label && sub.total) {
+        stage = sub.label + ` ${sub.completed}/${sub.total} ${sub.unit || "items"}`;
+      } else if (sub && sub.label) {
+        stage += " \u00b7 " + sub.label;
+      }
+      const bits = [];
+      if (j.stage_tokens) bits.push(`${j.stage_tokens}${j.target_tokens ? "/" + j.target_tokens : ""} tok`);
+      else if (j.tokens) bits.push(`${j.tokens} tok`);
+      if (j.eta_seconds != null) bits.push("~" + fmtDur(j.eta_seconds) + " left");
+      bits.push(fmtDur(j.elapsed) + " elapsed");
+      if (j.vram && j.vram.used_gib) bits.push(j.vram.used_gib + "/" + j.vram.total_gib + " GiB");
+      let pct = null;
+      if (j.target_tokens && j.stage_tokens) pct = 100 * j.stage_tokens / j.target_tokens;
+      else if (sub && sub.total) pct = 100 * sub.completed / sub.total;
+      setProgress(stage, bits.join(" \u00b7 "), pct === null, pct);
+      renderLog(j.events);
     } else if (j.status === "done") {
       stopPolling();
+      renderLog(j.events);
       onDone(j);
       return;
     } else {
@@ -334,7 +383,11 @@ async function poll(jobId) {
         $("prog").classList.remove("on");
         showError("Cancelled.");
       } else {
-        $("prog").classList.remove("on");
+        $("bar").classList.remove("indet");
+        $("bar").querySelector("i").style.width = "0%";
+        $("stage").textContent = "Failed";
+        $("pmeta").textContent = fmtDur(j.elapsed) + " elapsed";
+        renderLog(j.events);
         showError(j.error || "Generation failed.");
       }
       refreshHistory();
@@ -405,6 +458,7 @@ async function generate() {
   $("result").classList.remove("on");
   $("generate").disabled = true;
   $("cancel").disabled = false;
+  renderLog([]);
   setProgress("Submitting\u2026", "", true);
 
   try {
@@ -479,8 +533,11 @@ async function refreshHistory() {
       b.className = "ghost";
       const secs = r.audio_seconds ? ` \u00b7 ${Math.floor(r.audio_seconds/60)}:${String(Math.round(r.audio_seconds%60)).padStart(2,"0")}` : "";
       const took = (r.generation_seconds != null) ? `<span class="t" title="generation time">${r.generation_seconds >= 60 ? `${Math.floor(r.generation_seconds/60)}m ${Math.round(r.generation_seconds%60)}s` : `${Math.round(r.generation_seconds)}s`}</span>` : "";
+      const dead = r.status === "error" || r.status === "cancelled";
+      const badge = dead ? `<span class="badge ${r.status}">${r.status}</span>` : "";
       const tag = r.cover ? "cover" : "song";
-      b.innerHTML = `<b>${tag} \u00b7 seed ${r.seed}</b>${secs}${took}<div class="s">${(r.style || "").replace(/</g,"&lt;")}</div>`;
+      b.innerHTML = `<b>${tag} \u00b7 seed ${r.seed}</b>${secs}${took}${badge}<div class="s">${(r.style || "").replace(/</g,"&lt;")}</div>`;
+      if (dead || !r.audio) b.disabled = true;
       b.onclick = () => { if (r.audio) window.open(r.audio, "_blank"); };
       box.appendChild(b);
     }

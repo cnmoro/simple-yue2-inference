@@ -52,6 +52,12 @@ def _default_sheetsage2_py() -> Path:
 SHEETSAGE2_PY = Path(os.environ.get("YUE2_SHEETSAGE2_PY", _default_sheetsage2_py()))
 FRAMES_PER_SECOND = 25  # YuE2 codec frame rate; 1 semantic token = 0.04 s
 
+
+def cover_available() -> bool:
+    """Covers need SheetSage2, which lives in a separate env (see setup_sheetsage2.sh)."""
+    return SHEETSAGE2_PY.exists() and (SHEETSAGE2_DIR / "config.json").exists()
+
+
 STAGES = {
     "queued": "Queued",
     "loading": "Loading model",
@@ -64,6 +70,74 @@ STAGES = {
     "error": "Error",
     "cancelled": "Cancelled",
 }
+
+
+def vram_usage() -> dict | None:
+    """Process VRAM view, cheap enough to poll from the request thread."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        total = torch.cuda.get_device_properties(0).total_memory / 2**30
+        return {
+            "used_gib": round(torch.cuda.memory_allocated() / 2**30, 1),
+            "total_gib": round(total, 1),
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Set by the worker so the library's NAR/VAE counters reach the active job.
+_DETAIL_SINK = None
+
+
+def _install_progress_bridge() -> None:
+    """Forward yue2's stage counters to the webUI.
+
+    The pipeline only wires its on_progress callbacks when progress is enabled,
+    and those callbacks land on yue2.progress._Stage. Wrapping update() is the
+    only way to observe the NAR/VAE steps without reimplementing pipeline logic.
+    """
+    try:
+        from yue2 import progress as yue2_progress
+
+        stage = yue2_progress._Stage
+    except Exception:  # noqa: BLE001
+        return
+    if getattr(stage.update, "_webui_bridge", False):
+        return
+    original = stage.update
+
+    def update(self, completed, total=None):
+        original(self, completed, total)
+        sink = _DETAIL_SINK
+        if sink is not None:
+            sink(self.label, self.completed, self.total, self.unit)
+
+    update._webui_bridge = True
+    stage.update = update
+
+
+_install_progress_bridge()
+
+
+def note(job: "Job", text: str) -> None:
+    job.events.append({"t": round(time.time() - (job.started or time.time()), 1), "text": text})
+    del job.events[:-40]
+
+
+def _job_sink(job: "Job"):
+    def sink(label, done, total, unit):
+        # AR stages report no total; only NAR steps and VAE chunks are useful.
+        if total is None:
+            return
+        job.sub_label = label
+        job.sub_done = done or 0
+        job.sub_total = total
+        job.sub_unit = unit or ""
+
+    return sink
 
 
 @dataclass
@@ -85,6 +159,33 @@ class Job:
     cover: bool = False
     generation_seconds: float | None = None
     cancel: bool = False
+    # live detail
+    stage_started: float | None = None
+    stage_tokens: int = 0
+    target_tokens: int | None = None
+    sub_label: str = ""
+    sub_done: int = 0
+    sub_total: int | None = None
+    sub_unit: str = ""
+    events: list = field(default_factory=list)
+
+    def eta_seconds(self) -> float | None:
+        if not self.stage_started:
+            return None
+        elapsed = time.time() - self.stage_started
+        if elapsed <= 0:
+            return None
+        if self.status in ("planning", "generating") and self.target_tokens and self.stage_tokens:
+            if self.stage_tokens < 5:
+                return None  # the first tokens carry prefill, so the rate is noise
+            rate = self.stage_tokens / elapsed
+            if rate > 0:
+                return max(0.0, (self.target_tokens - self.stage_tokens) / rate)
+        if self.sub_total and self.sub_done:
+            rate = self.sub_done / elapsed
+            if rate > 0:
+                return max(0.0, (self.sub_total - self.sub_done) / rate)
+        return None
 
     def public(self) -> dict:
         now = self.finished or time.time()
@@ -104,6 +205,21 @@ class Job:
             "score": self.score,
             "format": Path(self.audio).suffix.lstrip(".") if self.audio else self.params.get("format", "wav"),
             "generation_seconds": self.generation_seconds,
+            "stage_tokens": self.stage_tokens,
+            "target_tokens": self.target_tokens,
+            "eta_seconds": self.eta_seconds(),
+            "sub_progress": (
+                {
+                    "label": self.sub_label,
+                    "completed": self.sub_done,
+                    "total": self.sub_total,
+                    "unit": self.sub_unit,
+                }
+                if self.sub_label
+                else None
+            ),
+            "vram": vram_usage(),
+            "events": self.events[-12:],
         }
 
     def meta(self) -> dict:
@@ -164,6 +280,7 @@ class State:
             "queued": pending,
             "current": self.current,
             "device": os.environ.get("YUE2_DEVICE", "cuda"),
+            "cover_available": cover_available(),
         }
 
 
@@ -191,7 +308,7 @@ def load_pipeline():
         device=os.environ.get("YUE2_DEVICE", "cuda"),
         memory_budget_gib=MEMORY_GIB,
         backend=default_backend(),
-        progress=False,
+        progress=os.environ.get("YUE2_PROGRESS", "1") == "1",
         local_files_only=local_model and local_vae,
     )
     return pipe
@@ -267,11 +384,14 @@ def transcribe_cover(audio_path: str, job: Job) -> str:
 
 
 def run_job(job: Job):
+    global _DETAIL_SINK
     job.status = "loading"
     job.started = time.time()
+    job.stage_started = job.started
     if job.cancel:
         raise InterruptedError("cancelled")
     params = job.params
+    note(job, "job started")
 
     if params.get("cover_audio"):
         # Transcribe first, with YuE2 off the GPU, to keep both pipelines sequential.
@@ -279,19 +399,25 @@ def run_job(job: Job):
             STATE.pipe.close()
         job.cover = True
         job.status = "transcribing"
+        note(job, "transcribing reference (SheetSage2)")
         params["abc"] = transcribe_cover(params["cover_audio"], job)
         params["cot"] = "melody"
+        note(job, "transcription done")
 
     with STATE.load_lock:
         if STATE.pipe is None:
             if STATE.pipe_error:
                 raise RuntimeError(STATE.pipe_error)
+            load_started = time.time()
+            note(job, "loading model (first run is the slow one)")
             try:
                 STATE.pipe = load_pipeline()
             except Exception as exc:  # noqa: BLE001
                 STATE.pipe_error = f"model load failed: {exc}"
                 raise
+            note(job, f"model ready in {time.time() - load_started:.1f}s")
     pipe = STATE.pipe
+    _DETAIL_SINK = _job_sink(job)
 
     import dataclasses
 
@@ -322,33 +448,67 @@ def run_job(job: Job):
         request_kwargs["abc"] = params["abc"]
 
     cancelled = lambda: job.cancel  # noqa: E731
+    abc_target = getattr(config.abc, "max_tokens", None)
+    semantic_target = (sampling or {}).get("max_tokens") or getattr(config.semantic, "max_tokens", None)
+
+    def start_stage(status, target):
+        job.status = status
+        job.stage_started = time.time()
+        job.stage_tokens = 0
+        job.target_tokens = target
+        job.sub_label, job.sub_done, job.sub_total, job.sub_unit = "", 0, None, ""
 
     def on_token(phase, _token):
-        if phase == "abc":
-            job.status = "planning"
-        else:
-            job.status = "generating"
+        wanted = "planning" if phase == "abc" else "generating"
+        if job.status != wanted:
+            start_stage(wanted, abc_target if phase == "abc" else semantic_target)
         job.tokens += 1
+        job.stage_tokens += 1
 
+    planning = params["cot"] != "off" and not params.get("abc")
+    if planning:
+        start_stage("planning", abc_target)
+        note(job, f"planning score (ABC budget {abc_target} tokens)")
+    else:
+        note(job, "no symbolic plan (cot=off or supplied score)")
     plan = pipe.plan(**request_kwargs, cancelled=cancelled, on_token=on_token)
     job.score = plan.abc
     job.truncated = bool(plan.truncated)
+    if planning:
+        note(job, f"score ready: {len(plan.abc_ids)} tokens in {time.time() - job.stage_started:.1f}s")
 
     if params.get("plan_only"):
         job.status = "done"
         job.audio_seconds = None
+        note(job, "plan only: no audio requested")
         return
 
+    start_stage("generating", semantic_target)
+    cap = f" (cap {semantic_target} tokens = {semantic_target / FRAMES_PER_SECOND:.0f}s)" if semantic_target else ""
+    note(job, f"generating song tokens{cap}")
     semantic = pipe.generate_semantic(plan, sampling=sampling, cancelled=cancelled, on_token=on_token)
     job.truncated = job.truncated or bool(semantic.truncated)
+    seconds = semantic.timing.get("seconds") or (time.time() - job.stage_started)
+    rate = len(semantic.tokens) / seconds if seconds else 0.0
+    note(job, f"semantic: {len(semantic.tokens)} tokens in {seconds:.1f}s ({rate:.1f} tok/s)")
     if job.cancel:
         raise InterruptedError("cancelled")
-    job.status = "synthesizing"
+
+    start_stage("synthesizing", None)
+    job.sub_label, job.sub_unit = "Synthesizing audio", "steps"
+    note(job, "solving the acoustic flow (NAR)")
+    synth_started = time.time()
     latents = pipe.synthesize(semantic, cancelled=cancelled)
+    note(job, f"latents ready in {time.time() - synth_started:.1f}s")
     if job.cancel:
         raise InterruptedError("cancelled")
-    job.status = "decoding"
+
+    start_stage("decoding", None)
+    job.sub_label, job.sub_unit = "Decoding audio", "chunks"
+    note(job, "decoding audio (VAE)")
+    decode_started = time.time()
     audio = pipe.decode(latents, full=bool(params.get("fast_decode")))
+    note(job, f"decoded {len(audio) / 48000:.1f}s of audio in {time.time() - decode_started:.1f}s")
 
     directory = OUTPUTS / job.id
     directory.mkdir(parents=True, exist_ok=True)
@@ -365,12 +525,14 @@ def run_job(job: Job):
         sf.write(path, audio, 48000, subtype=subtype)
     job.audio = path.name
     job.audio_seconds = round(len(audio) / 48000, 1)
+    note(job, f"wrote {path.name} ({job.audio_seconds:.1f}s)")
     if job.score:
         (directory / "score.abc").write_text(job.score, encoding="utf-8")
     job.message = f"{job.tokens} tokens"
 
 
 def worker():
+    global _DETAIL_SINK
     while True:
         job_id = STATE.queue.get()
         job = STATE.get(job_id)
@@ -387,8 +549,10 @@ def worker():
         except Exception as exc:  # noqa: BLE001
             job.status = "error"
             job.error = str(exc)
+            note(job, f"failed: {exc}")
             traceback.print_exc()
         finally:
+            _DETAIL_SINK = None
             job.finished = time.time()
             if job.started:
                 job.generation_seconds = round(job.finished - job.started, 1)
@@ -473,6 +637,12 @@ def api_cover(
         raise HTTPException(422, "format must be wav or flac")
     if cot not in ("melody", "full"):
         raise HTTPException(422, "covers use cot=melody (recommended) or cot=full")
+    if not cover_available():
+        raise HTTPException(
+            503,
+            "Covers are unavailable on this install: the SheetSage2 environment is missing "
+            "(see setup_sheetsage2.sh). Text -> Song still works.",
+        )
     suffix = Path(audio.filename or "").suffix.lower()
     if suffix not in AUDIO_SUFFIXES:
         raise HTTPException(422, f"unsupported audio type {suffix or '(none)'}")
