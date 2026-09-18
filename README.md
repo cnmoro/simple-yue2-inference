@@ -78,9 +78,10 @@ slower than subsequent songs.
 | CFG scale | Text guidance. Default is 1.0 (`1.01` for `cot=off`). Try 1.2. |
 | ABC score | Optional score to condition on. Requires `melody` or `full`. |
 | Plan only | Returns the generated ABC score without rendering audio. |
+| Convert to MP3 | Encode the result with `ffmpeg` at 320 kbps and drop the WAV/FLAC, so the job yields a single `.mp3`. Needs `ffmpeg` (or `YUE2_FFMPEG`). |
 | Advanced | Sampling (`temperature`, `top-p`, `top-k`, `repetition penalty`), flow-matching `steps`, ABC token budget, fast decode. |
 
-Songs are written to `outputs/<job-id>/` as `song.wav|flac`, `score.abc`, and
+Songs are written to `outputs/<job-id>/` as `song.wav|flac|mp3`, `score.abc`, and
 `meta.json`. Covers also keep `input/reference.*` and the full
 `transcription/` directory.
 
@@ -141,6 +142,8 @@ Environment variables:
 | `YUE2_OUTPUTS` | `./outputs` | Where songs are written |
 | `YUE2_MEMORY_GIB` | `16` | VRAM budget. Lower to 12 forces small VAE tiles. |
 | `YUE2_DEVICE` | `cuda` | `cuda`, `mps`, or `cpu` |
+| `YUE2_BACKEND` | `torch`, or `torch-eager` on ROCm | AR backend. The CUDA-graph path needs flash-attention, so ROCm falls back to `torch-eager`. |
+| `YUE2_FFMPEG` | `ffmpeg` from `PATH` | ffmpeg binary used for MP3 export |
 | `YUE2_HOST` / `YUE2_PORT` | `127.0.0.1` / `7860` | Server bind |
 | `YUE2_PRELOAD` | `0` | Set to `1` to load the model at startup |
 | `YUE2_SHEETSAGE2` | `./models/SheetSage2` | SheetSage2 snapshot (covers) |

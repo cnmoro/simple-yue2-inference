@@ -158,6 +158,11 @@
         </div>
       </div>
 
+      <div class="check">
+        <input type="checkbox" id="mp3">
+        <span>Convert to MP3 <small>Encode with ffmpeg at 320 kbps and delete the WAV/FLAC, so the result is a single .mp3 file.</small></span>
+      </div>
+
       <div class="row3">
         <div>
           <label for="seed">Seed <span class="hint">blank = random</span></label>
@@ -414,6 +419,7 @@ async function generate() {
       const cfg = num("cfg"); if (cfg !== null) fd.append("cfg_scale", cfg);
       const dur = num("max_duration"); if (dur !== null) fd.append("max_duration", dur);
       if ($("fast_decode").checked) fd.append("fast_decode", "true");
+      if ($("mp3").checked) fd.append("mp3", "true");
       r = await fetch("/api/cover", { method: "POST", body: fd });
     } else {
       const body = {
@@ -433,6 +439,7 @@ async function generate() {
         ode_steps: num("ode_steps"),
         max_abc_tokens: num("max_abc_tokens"),
         fast_decode: $("fast_decode").checked,
+        mp3: $("mp3").checked,
       };
       r = await fetch("/api/generate", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -483,6 +490,7 @@ $("segCover").onclick = () => setMode("cover");
 $("generate").onclick = generate;
 $("cancel").onclick = cancel;
 $("instrumental").onchange = toggleInstrumental;
+$("mp3").onchange = () => { $("format").disabled = $("mp3").checked; };
 $("randomSeed").onclick = () => { $("seed").value = Math.floor(Math.random() * 2147483647); };
 $("preload").onclick = async () => {
   $("preload").disabled = true;

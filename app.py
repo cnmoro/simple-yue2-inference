@@ -102,7 +102,7 @@ class Job:
             "audio": f"/api/job/{self.id}/audio" if self.audio else None,
             "audio_seconds": self.audio_seconds,
             "score": self.score,
-            "format": self.params.get("format", "wav"),
+            "format": Path(self.audio).suffix.lstrip(".") if self.audio else self.params.get("format", "wav"),
             "generation_seconds": self.generation_seconds,
         }
 
@@ -130,6 +130,7 @@ class GenerateRequest(BaseModel):
     ode_steps: int | None = Field(default=None, ge=1, le=256)
     max_abc_tokens: int | None = Field(default=None, ge=1, le=20000)
     fast_decode: bool = False
+    mp3: bool = False
 
 
 class State:
@@ -169,6 +170,16 @@ class State:
 STATE = State()
 
 
+def default_backend() -> str:
+    """The CUDA-graph path uses flash-attention ops, which ROCm (HIP) lacks."""
+    override = os.environ.get("YUE2_BACKEND")
+    if override:
+        return override
+    import torch
+
+    return "torch-eager" if torch.version.hip else "torch"
+
+
 def load_pipeline():
     from yue2 import YuE2Pipeline
 
@@ -179,6 +190,7 @@ def load_pipeline():
         vae=str(VAE_DIR) if local_vae else "m-a-p/YuE2-Vae",
         device=os.environ.get("YUE2_DEVICE", "cuda"),
         memory_budget_gib=MEMORY_GIB,
+        backend=default_backend(),
         progress=False,
         local_files_only=local_model and local_vae,
     )
@@ -197,6 +209,30 @@ def build_sampling(params: dict):
         overrides["max_tokens"] = frames
         overrides["min_tokens"] = min(200, frames)
     return overrides or None
+
+
+def ffmpeg_path() -> str | None:
+    return os.environ.get("YUE2_FFMPEG") or shutil.which("ffmpeg")
+
+
+def encode_mp3(source: Path, destination: Path) -> Path:
+    exe = ffmpeg_path()
+    if not exe:
+        raise RuntimeError(
+            "ffmpeg not found: install it and put it on PATH, or set YUE2_FFMPEG to its full path"
+        )
+    proc = subprocess.run(
+        [
+            exe, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(source), "-codec:a", "libmp3lame", "-b:a", "320k", str(destination),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not destination.exists():
+        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+        raise RuntimeError(f"ffmpeg mp3 encode failed: {tail}")
+    return destination
 
 
 def transcribe_cover(audio_path: str, job: Job) -> str:
@@ -317,9 +353,16 @@ def run_job(job: Job):
     directory = OUTPUTS / job.id
     directory.mkdir(parents=True, exist_ok=True)
     suffix = params.get("format", "wav")
-    path = directory / f"song.{suffix}"
-    subtype = "PCM_24" if suffix == "flac" else "PCM_16"
-    sf.write(path, audio, 48000, subtype=subtype)
+    if params.get("mp3"):
+        # Encode from a temporary WAV; the lossless intermediate is not kept.
+        wav_path = directory / "song.wav"
+        sf.write(wav_path, audio, 48000, subtype="PCM_16")
+        path = encode_mp3(wav_path, directory / "song.mp3")
+        wav_path.unlink(missing_ok=True)
+    else:
+        path = directory / f"song.{suffix}"
+        subtype = "PCM_24" if suffix == "flac" else "PCM_16"
+        sf.write(path, audio, 48000, subtype=subtype)
     job.audio = path.name
     job.audio_seconds = round(len(audio) / 48000, 1)
     if job.score:
@@ -424,6 +467,7 @@ def api_cover(
     max_duration: float | None = Form(None),
     fast_decode: bool = Form(False),
     format: str = Form("wav"),
+    mp3: bool = Form(False),
 ):
     if format not in ("wav", "flac"):
         raise HTTPException(422, "format must be wav or flac")
@@ -459,6 +503,7 @@ def api_cover(
         "ode_steps": None,
         "max_abc_tokens": None,
         "fast_decode": fast_decode,
+        "mp3": mp3,
     }
     STATE.put(job)
     return {"job_id": job.id, "seed": seed, "queued": STATE.snapshot()["queued"]}
