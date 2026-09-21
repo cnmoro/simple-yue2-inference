@@ -99,6 +99,8 @@ def normalize(data: dict) -> dict:
         if not isinstance(raw, dict):
             continue
         base = new_song(index)
+        if raw.get("id") is not None:
+            base["id"] = str(raw["id"])
         for key in SONG_FIELDS:
             if raw.get(key) is not None:
                 base[key] = raw[key]
