@@ -544,7 +544,7 @@ async function poll(jobId) {
       const bits = [];
       if (j.stage_tokens) bits.push(`${j.stage_tokens}${j.target_tokens ? "/" + j.target_tokens : ""} tok`);
       else if (j.tokens) bits.push(`${j.tokens} tok`);
-      if (j.eta_seconds != null) bits.push("~" + fmtDur(j.eta_seconds) + " left");
+      if (j.eta_seconds != null) bits.push(etaText(j) || ("~" + fmtDur(j.eta_seconds) + " left"));
       bits.push(fmtDur(j.elapsed) + " elapsed");
       if (j.vram && j.vram.used_gib) bits.push(j.vram.used_gib + "/" + j.vram.total_gib + " GiB");
       let pct = null;
@@ -919,7 +919,7 @@ function liveLine(songs) {
     ? ` ${job.sub_progress.completed}/${job.sub_progress.total}` : "";
   const tokens = job.stage_tokens
     ? ` · ${job.stage_tokens}${job.target_tokens ? "/" + job.target_tokens : ""} tok` : "";
-  const eta = job.eta_seconds != null ? ` · ~${fmtDur(job.eta_seconds)} left` : "";
+  const eta = etaText(job) ? ` · ${etaText(job)}` : "";
   return `<div class="live">&#9654; track ${active.order} &middot; ${esc(active.title)} &middot; `
     + `${esc(job.stage || job.status)}${sub}${tokens} &middot; ${fmtDur(job.elapsed)} elapsed${eta}</div>`;
 }
@@ -1031,6 +1031,11 @@ function updateSteps(total, rendered, all, busy) {
   button.textContent = busy ? "Rendering…" : "Render all missing tracks";
 }
 
+function etaText(job) {
+  if (!job || job.eta_total_seconds == null) return "";
+  return "~" + fmtDur(job.eta_total_seconds) + (job.eta_calibrated ? " left" : " left (stage only)");
+}
+
 function songStatus(song) {
   const job = song.job;
   if (job && !["done", "error", "cancelled"].includes(job.status)) {
@@ -1042,7 +1047,8 @@ function songStatus(song) {
       bits.push(`${job.stage_tokens}${job.target_tokens ? "/" + job.target_tokens : ""} tok`);
     }
     if (job.elapsed) bits.push(fmtDur(job.elapsed));
-    if (job.eta_seconds != null) bits.push("~" + fmtDur(job.eta_seconds) + " left");
+    const eta = etaText(job);
+    if (eta) bits.push(eta);
     return { cls: "", text: bits.join(" \u00b7 ") };
   }
   if (song.status === "error" || (job && job.status === "error")) return { cls: "error", text: "error" };

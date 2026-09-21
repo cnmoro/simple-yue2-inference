@@ -131,6 +131,45 @@ def note(job: "Job", text: str) -> None:
     del job.events[:-40]
 
 
+# Observed cost of the NAR and VAE stages, as (semantic frames, seconds). The
+# totals below scale the last observation, so the estimate self-calibrates.
+_STAGE_COST: dict[str, tuple[int, float] | None] = {"nar": None, "vae": None}
+TIMINGS_FILE = OUTPUTS / "stage_timings.json"
+
+
+def _load_costs() -> None:
+    try:
+        data = json.loads(TIMINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return
+    for key in ("nar", "vae"):
+        entry = data.get(key)
+        if isinstance(entry, list) and len(entry) == 2:
+            _STAGE_COST[key] = (int(entry[0]), float(entry[1]))
+
+
+def _record_cost(stage: str, frames: int, seconds: float) -> None:
+    if frames > 0 and seconds > 0:
+        _STAGE_COST[stage] = (int(frames), float(seconds))
+        try:
+            TIMINGS_FILE.write_text(
+                json.dumps({k: v for k, v in _STAGE_COST.items() if v}), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _estimate_cost(stage: str, frames: int) -> float | None:
+    known = _STAGE_COST.get(stage)
+    if not known or frames <= 0 or known[0] <= 0:
+        return None
+    observed_frames, observed_seconds = known
+    return observed_seconds * (frames / observed_frames)
+
+
+_load_costs()
+
+
 def _job_sink(job: "Job"):
     def sink(label, done, total, unit):
         # AR stages report no total; only NAR steps and VAE chunks are useful.
@@ -191,6 +230,24 @@ class Job:
                 return max(0.0, (self.sub_total - self.sub_done) / rate)
         return None
 
+    def eta_total_seconds(self) -> float | None:
+        """Remaining time for this stage plus the NAR/VAE work still ahead."""
+        stage_eta = self.eta_seconds()
+        if self.status == "decoding":
+            return stage_eta
+        frames = int(self.target_tokens or 0)
+        if self.status == "synthesizing":
+            nar = stage_eta if stage_eta is not None else _estimate_cost("nar", frames)
+            vae = _estimate_cost("vae", frames)
+            if nar is None and vae is None:
+                return None
+            return (nar or 0.0) + (vae or 0.0)
+        if self.status in ("planning", "generating"):
+            if stage_eta is None:
+                return None
+            return stage_eta + (_estimate_cost("nar", frames) or 0.0) + (_estimate_cost("vae", frames) or 0.0)
+        return None
+
     def public(self) -> dict:
         now = self.finished or time.time()
         return {
@@ -212,6 +269,8 @@ class Job:
             "stage_tokens": self.stage_tokens,
             "target_tokens": self.target_tokens,
             "eta_seconds": self.eta_seconds(),
+            "eta_total_seconds": self.eta_total_seconds(),
+            "eta_calibrated": bool(_STAGE_COST["nar"] and _STAGE_COST["vae"]),
             "sub_progress": (
                 {
                     "label": self.sub_label,
@@ -519,7 +578,9 @@ def run_job(job: Job):
     note(job, "solving the acoustic flow (NAR)")
     synth_started = time.time()
     latents = pipe.synthesize(semantic, cancelled=cancelled)
-    note(job, f"latents ready in {time.time() - synth_started:.1f}s")
+    synth_seconds = time.time() - synth_started
+    _record_cost("nar", len(semantic.tokens), synth_seconds)
+    note(job, f"latents ready in {synth_seconds:.1f}s")
     if job.cancel:
         raise InterruptedError("cancelled")
 
@@ -528,7 +589,9 @@ def run_job(job: Job):
     note(job, "decoding audio (VAE)")
     decode_started = time.time()
     audio = pipe.decode(latents, full=bool(params.get("fast_decode")))
-    note(job, f"decoded {len(audio) / 48000:.1f}s of audio in {time.time() - decode_started:.1f}s")
+    decode_seconds = time.time() - decode_started
+    _record_cost("vae", len(semantic.tokens), decode_seconds)
+    note(job, f"decoded {len(audio) / 48000:.1f}s of audio in {decode_seconds:.1f}s")
 
     directory = OUTPUTS / job.id
     directory.mkdir(parents=True, exist_ok=True)
