@@ -767,7 +767,19 @@ def api_cover(
 
 @app.get("/api/job/{job_id}")
 def api_job(job_id: str):
-    return STATE.get(job_id).public()
+    job = STATE.jobs.get(job_id)
+    if job is not None:
+        return job.public()
+    # Jobs from a previous run are only on disk; the UI still polls them.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", job_id):
+        raise HTTPException(422, "bad job id")
+    meta = OUTPUTS / job_id / "meta.json"
+    if not meta.is_file():
+        raise HTTPException(404, "unknown job")
+    try:
+        return json.loads(meta.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(404, "unknown job") from None
 
 
 @app.post("/api/job/{job_id}/cancel")

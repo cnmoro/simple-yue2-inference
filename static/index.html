@@ -378,6 +378,7 @@
       <div class="actions">
         <button class="primary" id="setRender" disabled>Render all missing tracks</button>
         <button class="ghost" id="setCollapse">Expand all</button>
+        <button class="ghost" id="setRefresh">Refresh</button>
       </div>
       <div id="setTracks"></div>
     </div>
@@ -577,9 +578,9 @@ async function poll(jobId) {
     }
     pollTimer = setTimeout(() => poll(jobId), 1000);
   } catch (e) {
-    showError("Lost connection to server: " + e);
-    $("generate").disabled = false;
-    $("cancel").disabled = true;
+    // keep polling: a dropped request is not a failed generation
+    $("pmeta").textContent = "reconnecting\u2026";
+    pollTimer = setTimeout(() => poll(jobId), 2500);
   }
 }
 
@@ -804,6 +805,14 @@ function initSets() {
   $("setPick").onchange = () => loadSet($("setPick").value);
   $("setDurationMode").onchange = () => queueSave();
   $("setCollapse").onclick = toggleAllCards;
+  $("setRefresh").onclick = async () => {
+    const fresh = await jfetch(`/api/sets/${setId}`);
+    setData = fresh;
+    renderTracks();
+    updateSetInfo();
+    if ((setData.songs || []).some(isBusy)) startSetPoll();
+    setStatus("refreshed");
+  };
   $("setNew").onclick = newSet;
   $("setSave").onclick = () => saveSet(true);
   $("setDelete").onclick = deleteSet;
@@ -1414,7 +1423,7 @@ function mergeJobs(fresh) {
 }
 
 async function pollSetOnce() {
-  if (!setId) return false;
+  if (!setId) return null;
   try {
     const fresh = await jfetch(`/api/sets/${setId}`);
     mergeJobs(fresh);
@@ -1426,7 +1435,8 @@ async function pollSetOnce() {
     if (active) setStatus(`rendering track ${active.order} — ${songStatus(active).text}`);
     return !!active;
   } catch (e) {
-    return false;
+    // A single failed request must not look like "render finished".
+    return null;
   }
 }
 
@@ -1434,7 +1444,7 @@ function startSetPoll() {
   if (setPollTimer) return;
   const tick = async () => {
     const busy = await pollSetOnce();
-    if (busy) return;
+    if (busy === null || busy) return;
     stopSetPoll();
     refreshPicker();
     updateSetInfo();
