@@ -40,6 +40,16 @@ def display_title(song: dict) -> str:
     return f"{title} ({translation})" if translation else title
 
 
+def bake_translation(song: dict) -> bool:
+    """Write the translation into the title itself, as Original (Translation)."""
+    translation = str(song.get("title_translation") or "").strip()
+    if not translation:
+        return False
+    song["title"] = display_title(song)
+    song["title_translation"] = ""
+    return True
+
+
 # --- storage ---------------------------------------------------------------
 
 def _dir() -> Path:

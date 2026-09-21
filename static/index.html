@@ -399,6 +399,7 @@
       <div class="actions">
         <button class="primary" id="setRender" disabled>Render all missing tracks</button>
         <button class="ghost" id="setTranslateAll">Translate all titles</button>
+        <button class="ghost" id="setApplyAll">Apply translations to titles</button>
         <button class="ghost" id="setCollapse">Expand all</button>
         <button class="ghost" id="setRefresh">Refresh</button>
       </div>
@@ -849,6 +850,7 @@ function initSets() {
   $("setDurationMode").onchange = () => queueSave();
   $("setCollapse").onclick = toggleAllCards;
   $("setTranslateAll").onclick = () => translateTitles(null);
+  $("setApplyAll").onclick = applyAllTranslations;
   $("setTranslationLang").oninput = () => queueSave();
   $("setRefresh").onclick = async () => {
     const fresh = await jfetch(`/api/sets/${setId}`);
@@ -1182,6 +1184,7 @@ function trackHtml(song) {
       <label>Lyrics</label><textarea class="tlyrics">${esc(song.lyrics)}</textarea>
       <div class="actions">
         <button class="ghost" data-act="translate" ${lang ? "" : "disabled"}>Translate title${lang ? " into " + esc(lang) : ""}</button>
+        <button class="ghost" data-act="apply" ${translation ? "" : "disabled"}>Apply to title</button>
         <button class="ghost" data-act="gen">${hasAudio ? "Re-render this track" : "Render this track"}</button>
         <button class="ghost" data-act="download" ${hasAudio ? "" : "disabled"}>Download audio</button>
       </div>
@@ -1267,6 +1270,7 @@ function onTrackClick(event) {
     else if (act === "gen") renderOne(song);
     else if (act === "download") downloadSong(song);
     else if (act === "translate") translateTitles([song.id]);
+    else if (act === "apply") applyTranslation(song);
     return;
   }
   const tag = (event.target.tagName || "").toLowerCase();
@@ -1381,6 +1385,40 @@ async function deleteSet() {
   } catch (e) {
     setError(String(e.message));
   }
+}
+
+function applyTranslation(song) {
+  const translation = (song.title_translation || "").trim();
+  if (!translation) {
+    setError("translate the title first, or type the translation");
+    return;
+  }
+  song.title = `${song.title} (${translation})`;
+  song.title_translation = "";
+  renderTracks();
+  updateSetInfo();
+  queueSave();
+  toast(`title is now "${song.title}"`, "good");
+}
+
+function applyAllTranslations() {
+  if (!setData) return;
+  let count = 0;
+  (setData.songs || []).forEach((song) => {
+    const translation = (song.title_translation || "").trim();
+    if (!translation) return;
+    song.title = `${song.title} (${translation})`;
+    song.title_translation = "";
+    count += 1;
+  });
+  if (!count) {
+    setError("no translations to apply — translate the titles first");
+    return;
+  }
+  renderTracks();
+  updateSetInfo();
+  queueSave();
+  toast(`applied ${count} translation(s) to the titles`, "good");
 }
 
 function llmConfig() {
