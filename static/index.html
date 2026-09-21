@@ -133,6 +133,8 @@
   .track .tstatus.done { color: var(--accent2); }
   .track .tstatus.error { color: var(--danger); }
   .track .lyricpeek { font-size: 11px; color: #6f7787; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track .tbar { height: 3px; background: var(--panel2); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .track .tbar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
   .track .tbody { display: none; }
   .track.open .tbody { display: block; }
   .track textarea { min-height: 58px; }
@@ -1032,15 +1034,34 @@ function updateSteps(total, rendered, all, busy) {
 function songStatus(song) {
   const job = song.job;
   if (job && !["done", "error", "cancelled"].includes(job.status)) {
-    const sub = job.sub_progress && job.sub_progress.total
-      ? ` ${job.sub_progress.completed}/${job.sub_progress.total}` : "";
-    const eta = job.eta_seconds != null ? ` ~${fmtDur(job.eta_seconds)}` : "";
-    return { cls: "", text: `${job.stage || job.status}${sub}${eta}` };
+    const bits = [job.stage || job.status];
+    if (job.sub_progress && job.sub_progress.total) {
+      bits.push(`${job.sub_progress.completed}/${job.sub_progress.total} ${job.sub_progress.unit || ""}`.trim());
+    }
+    if (job.stage_tokens) {
+      bits.push(`${job.stage_tokens}${job.target_tokens ? "/" + job.target_tokens : ""} tok`);
+    }
+    if (job.elapsed) bits.push(fmtDur(job.elapsed));
+    if (job.eta_seconds != null) bits.push("~" + fmtDur(job.eta_seconds) + " left");
+    return { cls: "", text: bits.join(" \u00b7 ") };
   }
   if (song.status === "error" || (job && job.status === "error")) return { cls: "error", text: "error" };
   if (song.audio_seconds) return { cls: "done", text: fmtDur(song.audio_seconds) };
   if (song.status === "cancelled") return { cls: "", text: "cancelled" };
+  if (song.status === "queued" || (job && job.status === "queued")) return { cls: "", text: "queued" };
   return { cls: "", text: "not rendered" };
+}
+
+function jobProgress(song) {
+  const job = song.job;
+  if (!job || ["done", "error", "cancelled"].includes(job.status)) return null;
+  if (job.target_tokens && job.stage_tokens) {
+    return Math.min(100, 100 * job.stage_tokens / job.target_tokens);
+  }
+  if (job.sub_progress && job.sub_progress.total) {
+    return Math.min(100, 100 * job.sub_progress.completed / job.sub_progress.total);
+  }
+  return null;
 }
 
 function trackHtml(song) {
@@ -1065,6 +1086,7 @@ function trackHtml(song) {
       <button class="ghost" data-act="del" title="Remove this track">&#10005;</button>
     </div>
     <div class="lyricpeek">${esc(peek)}</div>
+    <div class="tbar" style="display:none"><i></i></div>
     <div class="tbody">
       ${player}
       <div class="row3">
@@ -1117,6 +1139,11 @@ function updateStatuses() {
     const el = card.querySelector(".tstatus");
     el.className = "tstatus " + status.cls;
     el.textContent = status.text;
+    const bar = card.querySelector(".tbar");
+    if (!bar) return;
+    const pct = jobProgress(song);
+    bar.style.display = pct === null ? "none" : "";
+    bar.querySelector("i").style.width = pct === null ? "0%" : pct + "%";
   });
 }
 
@@ -1389,7 +1416,9 @@ async function pollSetOnce() {
     if (audioSignature() !== lastAudioSig) renderTracksPreserving();
     updateStatuses();
     updateSetInfo();
-    return (fresh.songs || []).some(isBusy);
+    const active = (fresh.songs || []).find(isBusy);
+    if (active) setStatus(`rendering track ${active.order} — ${songStatus(active).text}`);
+    return !!active;
   } catch (e) {
     return false;
   }
