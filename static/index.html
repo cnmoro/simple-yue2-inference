@@ -843,6 +843,9 @@ function initSets() {
     await loadSet(next);
   };
   $("setName").oninput = () => queueSave();
+  $("setMinutes").oninput = () => queueSave();
+  $("setTrackCount").oninput = () => queueSave();
+  $("setLanguage").oninput = () => queueSave();
   $("setDurationMode").onchange = () => queueSave();
   $("setCollapse").onclick = toggleAllCards;
   $("setTranslateAll").onclick = () => translateTitles(null);
@@ -948,6 +951,8 @@ async function loadSet(id) {
   $("setBackground").value = setData.background || "";
   $("setTranslationLang").value = setData.translation_language || "";
   $("setMinutes").value = setData.target_minutes || 60;
+  $("setTrackCount").value = setData.track_count || 12;
+  $("setLanguage").value = setData.lyrics_language || "English";
   $("setDurationMode").value = setData.duration_mode || "auto";
   if (setData.model && orModels.some((m) => m.id === setData.model)) {
     $("orModel").value = setData.model;
@@ -1324,6 +1329,8 @@ async function saveSet(explicit) {
   setData.background = $("setBackground").value;
   setData.translation_language = $("setTranslationLang").value.trim();
   setData.target_minutes = Number($("setMinutes").value) || 60;
+  setData.track_count = Number($("setTrackCount").value) || 12;
+  setData.lyrics_language = $("setLanguage").value.trim() || "English";
   setData.duration_mode = $("setDurationMode").value;
   try {
     setData = await jfetch(`/api/sets/${setId}`, {

@@ -92,6 +92,8 @@ def normalize(data: dict) -> dict:
     data.setdefault("model", "")
     data.setdefault("background", "")
     data.setdefault("translation_language", "")
+    data.setdefault("lyrics_language", "English")
+    data.setdefault("track_count", 12)
     data.setdefault("target_minutes", 60)
     data.setdefault("created", time.time())
     if data.get("duration_mode") not in ("auto", "fixed"):

@@ -973,6 +973,8 @@ def api_set_draft(set_id: str, req: SetDraft):
     data["background"] = background or data.get("background", "")
     data["brief"] = req.brief or data.get("brief", "")
     data["target_minutes"] = req.target_minutes
+    data["lyrics_language"] = req.language
+    data["track_count"] = req.track_count
     data["model"] = req.model
     if sets.tracklist_signature(songs) != old_signature:
         # the derived audio/video belong to the previous tracklist
