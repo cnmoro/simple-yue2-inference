@@ -802,7 +802,12 @@ function initSets() {
     setStatus("key saved in this browser");
   };
   $("orReload").onclick = () => loadModels(true);
-  $("setPick").onchange = () => loadSet($("setPick").value);
+  $("setPick").onchange = async () => {
+    const next = $("setPick").value;
+    await saveSet(false);
+    await loadSet(next);
+  };
+  $("setName").oninput = () => queueSave();
   $("setDurationMode").onchange = () => queueSave();
   $("setCollapse").onclick = toggleAllCards;
   $("setRefresh").onclick = async () => {
@@ -1270,7 +1275,8 @@ async function saveSet(explicit) {
       body: JSON.stringify(setData),
     });
     updateSetInfo();
-    if (explicit) setStatus("saved");
+    refreshPicker();  // the name and the track counts live in the dropdown
+    if (explicit) setStatus(`saved "${setData.name}"`);
   } catch (e) {
     setError(String(e.message));
   }
