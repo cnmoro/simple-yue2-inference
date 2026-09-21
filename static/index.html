@@ -851,7 +851,13 @@ function initSets() {
   $("setCollapse").onclick = toggleAllCards;
   $("setTranslateAll").onclick = () => translateTitles(null);
   $("setApplyAll").onclick = applyAllTranslations;
-  $("setTranslationLang").oninput = () => queueSave();
+  $("setTranslationLang").oninput = () => {
+    // the per-track translate button shows the target language, so redraw the rows
+    if (setData) setData.translation_language = $("setTranslationLang").value.trim();
+    renderTracksPreserving();
+    updateSetInfo();
+    queueSave();
+  };
   $("setRefresh").onclick = async () => {
     const fresh = await jfetch(`/api/sets/${setId}`);
     setData = fresh;
@@ -1078,7 +1084,10 @@ function updateSetInfo() {
     : "";
   $("setSummary").innerHTML = songs.length
     ? `${songs.length} tracks &middot; estimated ${fmtDur(planned)} &middot; rendered `
-      + `${rendered.length}/${songs.length} (${fmtDur(done)})` + liveLine(songs) + overshoot
+      + `${rendered.length}/${songs.length} (${fmtDur(done)})`
+      + ((setData.translation_language || "").trim()
+          ? ` &middot; titles \u2192 ${esc(setData.translation_language.trim())}` : "")
+      + liveLine(songs) + overshoot
     : "No tracks yet. Fill step 1 and hit Draft with LLM.";
   $("setPublishInfo").textContent = rendered.length
     ? `${rendered.length}/${songs.length} rendered · ${fmtDur(done)} total`
@@ -1144,12 +1153,11 @@ function trackHtml(song) {
   const status = songStatus(song);
   const hasAudio = !!(song.job_id && song.audio);
   const lang = (setData && setData.translation_language) || "";
-  const langCode = lang ? lang.slice(0, 2).toUpperCase() : "TR";
+  const langCode = lang ? "\u2192" + lang.slice(0, 2).toUpperCase() : "\u2192?";
   const translation = (song.title_translation || "").trim();
   const composed = translation
     ? `<div class="tsub">${esc(song.title)} (${esc(translation)})</div>`
-    : "";
-  const firstLine = (song.lyrics || "").split("\n").filter((l) => l.trim() && !l.trim().startsWith("["))[0];
+    : "";  const firstLine = (song.lyrics || "").split("\n").filter((l) => l.trim() && !l.trim().startsWith("["))[0];
   const peek = firstLine || song.style || "(no lyrics yet)";
   const player = hasAudio
     ? `<audio class="tplayer" controls preload="metadata" src="/api/job/${esc(song.job_id)}/audio?inline=1"></audio>`
