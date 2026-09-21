@@ -133,6 +133,7 @@
   .track .tstatus.done { color: var(--accent2); }
   .track .tstatus.error { color: var(--danger); }
   .track .lyricpeek { font-size: 11px; color: #6f7787; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track .tsub { font-size: 11px; color: var(--accent2); margin-top: 5px; }
   .track .tbar { height: 3px; background: var(--panel2); border-radius: 2px; margin-top: 6px; overflow: hidden; }
   .track .tbar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
   .track .tbody { display: none; }
@@ -364,6 +365,22 @@
             <option value="fixed">fixed — cap each track at the estimate below</option>
           </select>
         </div>
+        <div>
+          <label for="setTranslationLang">Title translation <span class="hint">language for the Original (Translation) output</span></label>
+          <input type="text" id="setTranslationLang" list="languageList" placeholder="Portuguese">
+          <datalist id="languageList">
+            <option value="Portuguese"></option>
+            <option value="English"></option>
+            <option value="Spanish"></option>
+            <option value="French"></option>
+            <option value="German"></option>
+            <option value="Italian"></option>
+            <option value="Japanese"></option>
+            <option value="Korean"></option>
+            <option value="Chinese"></option>
+            <option value="Russian"></option>
+          </datalist>
+        </div>
       </div>
       <div class="actions">
         <button class="primary" id="setDraft">Draft with LLM</button>
@@ -377,6 +394,7 @@
       <div class="setbar" id="setSummary">No tracks yet.</div>
       <div class="actions">
         <button class="primary" id="setRender" disabled>Render all missing tracks</button>
+        <button class="ghost" id="setTranslateAll">Translate all titles</button>
         <button class="ghost" id="setCollapse">Expand all</button>
         <button class="ghost" id="setRefresh">Refresh</button>
       </div>
@@ -810,6 +828,8 @@ function initSets() {
   $("setName").oninput = () => queueSave();
   $("setDurationMode").onchange = () => queueSave();
   $("setCollapse").onclick = toggleAllCards;
+  $("setTranslateAll").onclick = () => translateTitles(null);
+  $("setTranslationLang").oninput = () => queueSave();
   $("setRefresh").onclick = async () => {
     const fresh = await jfetch(`/api/sets/${setId}`);
     setData = fresh;
@@ -909,6 +929,7 @@ async function loadSet(id) {
   $("setName").value = setData.name || "";
   $("setBrief").value = setData.brief || "";
   $("setBackground").value = setData.background || "";
+  $("setTranslationLang").value = setData.translation_language || "";
   $("setMinutes").value = setData.target_minutes || 60;
   $("setDurationMode").value = setData.duration_mode || "auto";
   if (setData.model && orModels.some((m) => m.id === setData.model)) {
@@ -942,11 +963,17 @@ function updateMediaState() {
   const image = (setData && setData.image) || null;
   const video = (setData && setData.video) || null;
   const concat = (setData && setData.concat) || null;
-  const rendered = (setData && (setData.songs || []).filter((s) => s.audio_seconds).length) || 0;
+  const songs = (setData && setData.songs) || [];
+  const rendered = songs.filter((s) => s.audio_seconds).length;
+  // joining only makes sense once every track has audio
+  const canConcat = songs.length > 0 && rendered === songs.length;
+  const concatButton = $("setConcat");
+  concatButton.disabled = !canConcat;
+  concatButton.title = canConcat ? "" : `${songs.length - rendered} track(s) still without audio`;
   $("setImageInfo").textContent = image
     ? `image: ${image.file} · ${(image.bytes / 1048576).toFixed(1)} MB`
     : "no image yet — generate one from the prompt above, then upload it here";
-  $("setVideo").disabled = !(image && rendered);
+  $("setVideo").disabled = !(image && canConcat);
   const audioButton = $("setDownload");
   audioButton.style.display = concat ? "" : "none";
   if (concat) audioButton.textContent = `Download audio (${(concat.bytes / 1048576).toFixed(1)} MB)`;
@@ -1036,7 +1063,6 @@ function updateSetInfo() {
   updateSteps(songs.length, rendered.length, songs.length, busy);
   updateMediaState();
 }
-
 function updateSteps(total, rendered, all, busy) {
   const step = total === 0 ? 1 : (rendered < all ? 2 : 3);
   document.querySelectorAll("#setSteps .step").forEach((el) => {
@@ -1093,6 +1119,12 @@ function jobProgress(song) {
 function trackHtml(song) {
   const status = songStatus(song);
   const hasAudio = !!(song.job_id && song.audio);
+  const lang = (setData && setData.translation_language) || "";
+  const langCode = lang ? lang.slice(0, 2).toUpperCase() : "TR";
+  const translation = (song.title_translation || "").trim();
+  const composed = translation
+    ? `<div class="tsub">${esc(song.title)} (${esc(translation)})</div>`
+    : "";
   const firstLine = (song.lyrics || "").split("\n").filter((l) => l.trim() && !l.trim().startsWith("["))[0];
   const peek = firstLine || song.style || "(no lyrics yet)";
   const player = hasAudio
@@ -1106,11 +1138,13 @@ function trackHtml(song) {
       <input type="text" class="ttitle" value="${esc(song.title)}" placeholder="Title">
       <span class="test">~${esc(song.target_seconds)}s</span>
       <span class="tstatus ${status.cls}">${esc(status.text)}</span>
+      <button class="ghost" data-act="translate" title="${lang ? "Translate this title into " + esc(lang) : "Set the translation language in step 1 first"}" ${lang ? "" : "disabled"}>${esc(langCode)}</button>
       <button class="ghost" data-act="up" title="Move up">&#8593;</button>
       <button class="ghost" data-act="down" title="Move down">&#8595;</button>
       <button class="ghost" data-act="gen" title="${hasAudio ? "Render this track again" : "Render this track"}">${renderLabel}</button>
       <button class="ghost" data-act="del" title="Remove this track">&#10005;</button>
     </div>
+    ${composed}
     <div class="lyricpeek">${esc(peek)}</div>
     <div class="tbar" style="display:none"><i></i></div>
     <div class="tbody">
@@ -1120,9 +1154,12 @@ function trackHtml(song) {
         <div><label>Seed</label><input type="number" class="tseed" value="${song.seed == null ? "" : esc(song.seed)}"></div>
         <div><label>Job</label><input type="text" value="${esc(song.job_id || "")}" readonly></div>
       </div>
+      <label>Title translation <span class="hint">goes after the original as Original (Translation)</span></label>
+      <input type="text" class="ttrans" value="${esc(song.title_translation || "")}" placeholder="translated title">
       <label>Style</label><textarea class="tstyle">${esc(song.style)}</textarea>
       <label>Lyrics</label><textarea class="tlyrics">${esc(song.lyrics)}</textarea>
       <div class="actions">
+        <button class="ghost" data-act="translate" ${lang ? "" : "disabled"}>Translate title${lang ? " into " + esc(lang) : ""}</button>
         <button class="ghost" data-act="gen">${hasAudio ? "Re-render this track" : "Render this track"}</button>
         <button class="ghost" data-act="download" ${hasAudio ? "" : "disabled"}>Download audio</button>
       </div>
@@ -1189,6 +1226,7 @@ function onTrackInput(event) {
   if (cls.includes("ttitle")) song.title = event.target.value;
   else if (cls.includes("tstyle")) song.style = event.target.value;
   else if (cls.includes("tlyrics")) song.lyrics = event.target.value;
+  else if (cls.includes("ttrans")) song.title_translation = event.target.value;
   else if (cls.includes("tsecs")) song.target_seconds = Number(event.target.value) || song.target_seconds;
   else if (cls.includes("tseed")) song.seed = event.target.value === "" ? null : Number(event.target.value);
   queueSave();
@@ -1206,6 +1244,7 @@ function onTrackClick(event) {
     else if (act === "del") removeSong(song);
     else if (act === "gen") renderOne(song);
     else if (act === "download") downloadSong(song);
+    else if (act === "translate") translateTitles([song.id]);
     return;
   }
   const tag = (event.target.tagName || "").toLowerCase();
@@ -1266,6 +1305,7 @@ async function saveSet(explicit) {
   setData.name = $("setName").value.trim() || "Untitled set";
   setData.brief = $("setBrief").value;
   setData.background = $("setBackground").value;
+  setData.translation_language = $("setTranslationLang").value.trim();
   setData.target_minutes = Number($("setMinutes").value) || 60;
   setData.duration_mode = $("setDurationMode").value;
   try {
@@ -1319,32 +1359,72 @@ async function deleteSet() {
   }
 }
 
-async function draftSet(append) {
-  setError("");
-  if (!setId) { setError("create or pick a set first"); return; }
+function llmConfig() {
   const key = $("orKey").value.trim() || localStorage.getItem(OR_KEY) || "";
   if (!key) {
     setError("paste your OpenRouter key in the OpenRouter section");
     $("orBox").open = true;
-    return;
+    return null;
   }
   const model = $("orModel").value;
   if (!model) {
     setError("pick a model");
     $("orBox").open = true;
-    return;
+    return null;
   }
   localStorage.setItem(OR_KEY, key);
+  return { key: key, model: model };
+}
+
+async function translateTitles(songIds) {
+  setError("");
+  if (!setData || !setId) return;
+  const language = $("setTranslationLang").value.trim();
+  if (!language) {
+    setError("set the title translation language in step 1");
+    return;
+  }
+  const config = llmConfig();
+  if (!config) return;
+  $("setTranslateAll").disabled = true;
+  setStatus(`translating titles into ${language}...`);
+  try {
+    setData = await jfetch(`/api/sets/${setId}/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: config.key,
+        model: config.model,
+        language: language,
+        song_ids: songIds || null,
+      }),
+    });
+    renderTracks();
+    updateSetInfo();
+    setStatus(songIds ? "title translated — edit it if you want" : "titles translated — edit them if you want");
+  } catch (e) {
+    setError(String(e.message));
+    setStatus("");
+  } finally {
+    $("setTranslateAll").disabled = false;
+  }
+}
+
+async function draftSet(append) {
+  setError("");
+  if (!setId) { setError("create or pick a set first"); return; }
+  const config = llmConfig();
+  if (!config) return;
   $("setDraft").disabled = true;
   $("setDraftAppend").disabled = true;
-  setStatus(append ? `adding tracks with ${model}...` : `drafting with ${model}...`);
+  setStatus(append ? `adding tracks with ${config.model}...` : `drafting with ${config.model}...`);
   try {
     setData = await jfetch(`/api/sets/${setId}/draft`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        api_key: key,
-        model: model,
+        api_key: config.key,
+        model: config.model,
         brief: $("setBrief").value,
         target_minutes: Number($("setMinutes").value) || 60,
         track_count: Number($("setTrackCount").value) || 12,
@@ -1495,6 +1575,7 @@ async function concatSet() {
     setStatus("");
   } finally {
     $("setConcat").disabled = false;
+    updateMediaState();
   }
 }
 

@@ -28,9 +28,16 @@ MAX_TRACK_SECONDS = 900  # matches the webUI's max_duration ceiling
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 SONG_FIELDS = (
-    "title", "style", "lyrics", "target_seconds",
+    "title", "title_translation", "style", "lyrics", "target_seconds",
     "notes", "job_id", "seed", "status", "audio", "audio_seconds",
 )
+
+
+def display_title(song: dict) -> str:
+    """What the exports and the chapter list show: Original (Translation)."""
+    title = str(song.get("title") or "").strip() or "Untitled"
+    translation = str(song.get("title_translation") or "").strip()
+    return f"{title} ({translation})" if translation else title
 
 
 # --- storage ---------------------------------------------------------------
@@ -60,6 +67,7 @@ def new_song(order: int, **fields) -> dict:
         "id": uuid.uuid4().hex[:8],
         "order": order,
         "title": "",
+        "title_translation": "",
         "style": "",
         "lyrics": "",
         "target_seconds": 300,
@@ -83,6 +91,7 @@ def normalize(data: dict) -> dict:
     data.setdefault("brief", "")
     data.setdefault("model", "")
     data.setdefault("background", "")
+    data.setdefault("translation_language", "")
     data.setdefault("target_minutes", 60)
     data.setdefault("created", time.time())
     if data.get("duration_mode") not in ("auto", "fixed"):
@@ -476,13 +485,34 @@ def timeline(data: dict) -> tuple[list[dict], float]:
             {
                 "at": at,
                 "stamp": _stamp(at),
-                "title": song.get("title") or f"Track {song['order']}",
+                "title": display_title(song),
                 "seconds": seconds,
                 "rendered": bool(rendered),
             }
         )
         at += seconds
     return rows, at
+
+
+def build_translation_messages(titles: list[str], language: str):
+    system = (
+        "You translate song titles for a music release.\n"
+        "Reply with strict JSON only: no prose, no code fences.\n"
+        'Schema: {"translations": [string, ...]} in the same order and with the same length '
+        "as the input titles.\n"
+        f"Translate every title into {language}. Keep each one short and natural as a song title, "
+        "with no quotes and no explanation. If a title is already in the target language, "
+        "return it unchanged."
+    )
+    user = json.dumps({"titles": titles}, ensure_ascii=False)
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def apply_translations(songs: list[dict], translations) -> None:
+    if not isinstance(translations, list) or len(translations) != len(songs):
+        raise ValueError("expected one translation per title")
+    for song, text in zip(songs, translations):
+        song["title_translation"] = str(text or "").strip()
 
 
 def export_json(data: dict) -> str:

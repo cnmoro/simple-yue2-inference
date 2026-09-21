@@ -168,12 +168,18 @@ estimate as a cap.
 **3. Join, illustrate and publish.** The background prompt (one image for the
 whole set) with a copy button, an upload field for the image you generated
 (png/jpg/webp), and a video size selector. **Concatenate audio** joins the
-rendered tracks with ffmpeg into `sets/<id>/set.mp3` (320 kbps by default);
-**Make video** renders the still image plus that audio into `sets/<id>/set.mp4`
-(h264 + aac, padded to 16:9, `+faststart`, bounded to the audio length).
-**Export for YouTube** produces a title plus a description with chapter
-timestamps and the background prompt; Markdown and JSON exports are also
-available.
+rendered tracks with ffmpeg into `sets/<id>/set.mp3` (320 kbps by default); it is
+only enabled once every track has audio. **Make video** renders the still image
+plus that audio into `sets/<id>/set.mp4` (h264 + aac, padded to 16:9,
+`+faststart`, bounded to the audio length). **Export for YouTube** produces a
+title plus a description with chapter timestamps and the background prompt;
+Markdown and JSON exports are also available.
+
+Titles can carry a translation: set the language in step 1, then use the button
+on a row (or **Translate all titles** in step 2) to have the model translate it
+through OpenRouter. The translation is stored next to the original and every
+output shows `Original (Translation)` — the chapter list, both text exports and
+the tracklist — while the original title stays editable and re-translatable.
 
 The joined files are derived from the current tracklist: they are deleted when a
 draft changes the tracklist or when a track is queued for re-rendering.

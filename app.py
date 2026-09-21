@@ -842,6 +842,13 @@ class SetDraft(BaseModel):
     append: bool = False
 
 
+class SetTranslate(BaseModel):
+    api_key: str = Field(min_length=8)
+    model: str = Field(min_length=1, max_length=200)
+    language: str = Field(min_length=2, max_length=60)
+    song_ids: list[str] | None = Field(default=None, max_length=60)
+
+
 class SetRender(BaseModel):
     only_missing: bool = True
     song_id: str | None = Field(default=None, max_length=40)
@@ -970,6 +977,29 @@ def api_set_draft(set_id: str, req: SetDraft):
     if sets.tracklist_signature(songs) != old_signature:
         # the derived audio/video belong to the previous tracklist
         sets.clear_renders(set_id)
+    return _enrich(set_id, sets.save_set(data))
+
+
+@app.post("/api/sets/{set_id}/translate")
+def api_set_translate(set_id: str, req: SetTranslate):
+    data = _load_set_or_404(set_id)
+    wanted = set(req.song_ids or [])
+    targets = [song for song in data["songs"] if not wanted or song["id"] in wanted]
+    titles = [str(song.get("title") or "").strip() or "Untitled" for song in targets]
+    if not titles:
+        raise HTTPException(422, "no tracks to translate")
+    messages = sets.build_translation_messages(titles, req.language)
+    try:
+        content = sets.openrouter_chat(
+            req.api_key, req.model, messages, max_tokens=2000, temperature=0.3
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc)) from exc
+    try:
+        sets.apply_translations(targets, sets.parse_json_object(content).get("translations"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"could not use the model reply ({exc})") from exc
+    data["translation_language"] = req.language
     return _enrich(set_id, sets.save_set(data))
 
 
