@@ -1235,6 +1235,21 @@ function updateStatuses() {
     const el = card.querySelector(".tstatus");
     el.className = "tstatus " + status.cls;
     el.textContent = status.text;
+
+    const busy = isBusy(song);
+    card.querySelectorAll('button[data-act="gen"]').forEach((button) => {
+      const inHeader = button.closest(".thead") !== null;
+      button.disabled = busy;
+      button.textContent = busy
+        ? "Rendering\u2026"
+        : song.audio_seconds
+          ? (inHeader ? "Re-render" : "Re-render this track")
+          : (inHeader ? "Render" : "Render this track");
+    });
+    card.querySelectorAll('button[data-act="del"]').forEach((button) => {
+      button.disabled = busy;
+    });
+
     const bar = card.querySelector(".tbar");
     if (!bar) return;
     const pct = jobProgress(song);
@@ -1561,7 +1576,7 @@ async function renderOne(song) {
   setError("");
   const button = $("setRender");
   button.disabled = true;
-  button.textContent = "Queuing…";
+  button.textContent = "Queuing\u2026";
   try {
     await saveSet(false);
     const out = await jfetch(`/api/sets/${setId}/render`, {
@@ -1569,7 +1584,9 @@ async function renderOne(song) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ only_missing: false, song_id: song.id }),
     });
-    setStatus(out.queued.length ? "track queued" : "nothing to queue");
+    setStatus(out.queued.length ? `track ${song.order} queued` : "nothing to queue");
+    toast(out.queued.length ? `track ${song.order} queued` : "nothing to queue",
+          out.queued.length ? "good" : "");
     await pollSetOnce();
     startSetPoll();
   } catch (e) {
