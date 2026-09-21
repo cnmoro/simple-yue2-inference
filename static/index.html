@@ -111,6 +111,10 @@
   .hist button:disabled { opacity: .6; cursor: default; }
   .seg button:disabled { opacity: .45; cursor: not-allowed; }
   .empty { color: var(--muted); font-size: 12px; }
+  .toast { position: fixed; right: 18px; bottom: 18px; z-index: 60; max-width: 460px; padding: 10px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font-size: 12.5px; box-shadow: 0 10px 28px rgba(0, 0, 0, .4); opacity: 0; transform: translateY(10px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.on { opacity: 1; transform: translateY(0); }
+  .toast.good { border-color: #24523f; }
+  .toast.bad { border-color: var(--danger); color: #ffd9de; }
   #tabs { max-width: 1400px; margin: 0 auto; padding: 18px 22px 0; }
   #setsPanel { max-width: 1400px; margin: 0 auto; padding: 18px 22px 60px; }
   .steps { display: flex; gap: 8px; margin: 4px 0 18px; flex-wrap: wrap; }
@@ -455,6 +459,7 @@
 <footer>
   YuE2-3B (CC BY-NC 4.0) &middot; M-A-P &middot; SheetSage2 for covers &middot; runs locally, one job at a time.
 </footer>
+<div class="toast" id="toast"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -805,10 +810,22 @@ function setError(message) {
   const el = $("setError");
   el.textContent = message || "";
   el.classList.toggle("on", !!message);
+  if (message) toast(message, "bad");
 }
 
 function setStatus(message) {
   $("setStatus").textContent = message || "";
+}
+
+// Messages at the bottom of the panel are off-screen while you work in step 2.
+let toastTimer = null;
+function toast(message, kind) {
+  const box = $("toast");
+  if (!message) { box.className = "toast"; box.textContent = ""; return; }
+  box.textContent = message;
+  box.className = "toast on" + (kind ? " " + kind : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.className = "toast"; }, 7000);
 }
 
 function initSets() {
@@ -1010,9 +1027,9 @@ async function makeVideo() {
   if (!setId) return;
   setError("");
   const [width, height] = ($("setVideoSize").value || "1920x1080").split("x").map(Number);
-  const button = $("setVideo");
-  button.disabled = true;
+  $("setVideo").disabled = true;
   setStatus("rendering the video with ffmpeg — a one hour set takes a few minutes...");
+  toast("rendering the video with ffmpeg\u2026");
   try {
     await saveSet(false);
     const out = await jfetch(`/api/sets/${setId}/video`, {
@@ -1386,8 +1403,12 @@ async function translateTitles(songIds) {
   }
   const config = llmConfig();
   if (!config) return;
-  $("setTranslateAll").disabled = true;
+  const button = $("setTranslateAll");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Translating\u2026";
   setStatus(`translating titles into ${language}...`);
+  toast(`translating titles into ${language}\u2026`);
   try {
     setData = await jfetch(`/api/sets/${setId}/translate`, {
       method: "POST",
@@ -1401,12 +1422,15 @@ async function translateTitles(songIds) {
     });
     renderTracks();
     updateSetInfo();
-    setStatus(songIds ? "title translated — edit it if you want" : "titles translated — edit them if you want");
+    const done = songIds ? "title translated — edit it if you want" : "titles translated — edit them if you want";
+    setStatus(done);
+    toast(done, "good");
   } catch (e) {
     setError(String(e.message));
     setStatus("");
   } finally {
-    $("setTranslateAll").disabled = false;
+    button.disabled = false;
+    button.textContent = label;
   }
 }
 
@@ -1418,6 +1442,7 @@ async function draftSet(append) {
   $("setDraft").disabled = true;
   $("setDraftAppend").disabled = true;
   setStatus(append ? `adding tracks with ${config.model}...` : `drafting with ${config.model}...`);
+  toast((append ? "adding" : "drafting") + ` tracks with ${config.model}\u2026 this can take a minute`);
   try {
     setData = await jfetch(`/api/sets/${setId}/draft`, {
       method: "POST",
@@ -1440,10 +1465,10 @@ async function draftSet(append) {
     const first = document.querySelector("#setTracks .track");
     if (first) first.classList.add("open");
     $("stepReview").scrollIntoView({ behavior: "smooth", block: "start" });
-    setStatus(
-      (append ? `added tracks — now ${(setData.songs || []).length} in the set` : `drafted ${(setData.songs || []).length} tracks`)
-      + " — review them in step 2"
-    );
+    const summary = (append ? `added tracks — now ${(setData.songs || []).length} in the set` : `drafted ${(setData.songs || []).length} tracks`)
+      + " — review them in step 2";
+    setStatus(summary);
+    toast(summary, "good");
   } catch (e) {
     setError(String(e.message));
     setStatus("");
@@ -1469,6 +1494,8 @@ async function renderSet() {
     setStatus(out.queued.length
       ? `${out.queued.length} track(s) queued — the worker picks them up one at a time`
       : "nothing to queue: every track already has audio");
+    toast(out.queued.length ? `${out.queued.length} track(s) queued` : "nothing to queue: every track already has audio",
+          out.queued.length ? "good" : "");
     await pollSetOnce();
     startSetPoll();
   } catch (e) {
@@ -1569,7 +1596,9 @@ async function concatSet() {
     });
     setData.concat = { file: out.file, bytes: out.bytes, download: out.download };
     updateMediaState();
-    setStatus(`${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`);
+    const joined = `${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`;
+    setStatus(joined);
+    toast(`joined: ${joined}`, "good");
   } catch (e) {
     setError(String(e.message));
     setStatus("");
