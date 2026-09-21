@@ -22,7 +22,7 @@ SETS_DIR = Path(os.environ.get("YUE2_SETS", ROOT / "sets"))
 OUTPUTS = Path(os.environ.get("YUE2_OUTPUTS", ROOT / "outputs"))
 OPENROUTER_API = os.environ.get("YUE2_OPENROUTER_API", "https://openrouter.ai/api/v1")
 
-MIN_TRACK_SECONDS = 60
+MIN_TRACK_SECONDS = 15
 MAX_TRACK_SECONDS = 900  # matches the webUI's max_duration ceiling
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}

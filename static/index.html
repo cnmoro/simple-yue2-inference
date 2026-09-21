@@ -360,8 +360,8 @@
         <div>
           <label for="setDurationMode">Track duration</label>
           <select id="setDurationMode">
-            <option value="auto">auto — sized from each planned score and lyrics</option>
-            <option value="fixed">fixed — use the per-track estimate as a cap</option>
+            <option value="auto">auto — each track is sized from its own score and lyrics, estimates ignored</option>
+            <option value="fixed">fixed — cap each track at the estimate below</option>
           </select>
         </div>
       </div>
@@ -1105,7 +1105,7 @@ function trackHtml(song) {
     <div class="tbody">
       ${player}
       <div class="row3">
-        <div><label>Estimate (s) <span class="hint">LLM guess</span></label><input type="number" class="tsecs" min="60" max="900" step="1" value="${esc(song.target_seconds)}"></div>
+        <div><label>Estimate (s) <span class="hint">LLM guess, only used in fixed mode</span></label><input type="number" class="tsecs" min="15" max="900" step="1" value="${esc(song.target_seconds)}"></div>
         <div><label>Seed</label><input type="number" class="tseed" value="${song.seed == null ? "" : esc(song.seed)}"></div>
         <div><label>Job</label><input type="text" value="${esc(song.job_id || "")}" readonly></div>
       </div>
