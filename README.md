@@ -74,7 +74,7 @@ slower than subsequent songs.
 | Instrumental | Clears and ignores lyrics. Best-effort — see the notes below. |
 | Planning mode `cot` | `full` = melody+chords, `melody` = melody only, `off` = no score. |
 | Seed | Same seed + same inputs = same song. Blank randomizes. |
-| Max duration (s) | Upper bound on audio length, 1–900 s, blank = 360. The song can end earlier. |
+| Max duration (s) | Upper bound on audio length, 1–900 s. **Blank = auto**, sized from the planned score and the lyrics. |
 | CFG scale | Text guidance. Default is 1.0 (`1.01` for `cot=off`). Try 1.2. |
 | ABC score | Optional score to condition on. Requires `melody` or `full`. |
 | Plan only | Returns the generated ABC score without rendering audio. |
@@ -109,15 +109,68 @@ built-in node does as well. It is an upper bound, not a target: the model can
 emit its end token earlier. When a cap is hit, the result shows "truncated
 (token cap)".
 
+**Leaving Max duration blank is the recommended setting.** The cap is then sized
+after the planning stage from what the song actually needs: the length of the
+generated ABC score (bars x beats / tempo) and, when there is no score, an
+estimate from the lyric sheet. A 15% margin is added (40% when the plan itself
+was truncated), and the result is clamped to the model's 24576-token context.
+The event log shows the decision, e.g.
+`auto duration: score/lyrics need ~215s -> cap 247s`. Hand-typed caps are the
+usual reason a song stops in the middle of a verse, because the planner often
+writes a score longer than the number typed.
+
 There is a second budget on the planning stage: **Max ABC tokens**. The UI
 prefills 8192, matching ComfyUI's built-in node; clear the field to fall back to
 the package's 4096. For long songs the generated score can run past 4096 tokens
 and get cut off, which then limits the song. Set it higher (up to 20000) if a
-long plan looks truncated.
+long plan looks truncated. When the plan is truncated the automatic duration
+still widens its margin, but the extra room is guesswork.
 
 **Fast decode** skips VAE tiling (`decode(full=True)`). It is noticeably faster
 when the card has room. On the 16 GB test card a 40 s clip decoded fine; a full
 360 s song is more likely to OOM, so leave it off for long songs.
+
+### Sets
+
+**Sets -> YouTube** builds a playlist instead of a single song. Each set is a
+JSON file under `sets/` with a name, a brief, one shared background prompt, and
+an ordered list of tracks (`title`, `style`, `lyrics`, and an estimate in
+seconds). The tab is organised in three steps.
+
+**1. Configure.** **OpenRouter** (collapsible) takes an API key and a model; the
+key is kept in the browser's `localStorage` and sent per request, never written
+to disk. The model list is proxied from `/api/v1/models`.
+
+- **Draft with LLM** replaces the tracklist: the brief goes to the chosen model,
+  which must answer with strict JSON (`set_name`, one `background` for the whole
+  set, and the songs). Estimates are rescaled to the requested total, clamped to
+  60-900 s, and duplicate titles are suffixed.
+- **Add tracks** appends instead of replacing. The prompt lists the existing
+  titles and styles so the new songs continue the set, and rendered audio is
+  kept for tracks whose title did not change.
+
+**2. Review and edit.** A summary line, then one row per track: title, estimate,
+live status and the first lyric line. Clicking a row opens its editor (style,
+lyrics, seed, estimate). **Render all missing tracks** queues everything onto the
+same single worker, in order; each row shows the live stage, token count and ETA.
+Track duration follows **Track duration**: `auto` (default) leaves the cap blank
+so each track is sized from its own score and lyrics, `fixed` uses the per-track
+estimate as a cap.
+
+**3. Join, illustrate and publish.** The background prompt (one image for the
+whole set) with a copy button, an upload field for the image you generated
+(png/jpg/webp), and a video size selector. **Concatenate audio** joins the
+rendered tracks with ffmpeg into `sets/<id>/set.mp3` (320 kbps by default);
+**Make video** renders the still image plus that audio into `sets/<id>/set.mp4`
+(h264 + aac, padded to 16:9, `+faststart`, bounded to the audio length).
+**Export for YouTube** produces a title plus a description with chapter
+timestamps and the background prompt; Markdown and JSON exports are also
+available.
+
+The joined files are derived from the current tracklist: they are deleted when a
+draft changes the tracklist or when a track is queued for re-rendering.
+
+`sets/` is gitignored, like `outputs/`: it is your content, not the app's.
 
 ### Covers
 
@@ -140,6 +193,7 @@ Environment variables:
 | `YUE2_MODEL` | `./models/YuE2-3B` | Model path or HF repo id |
 | `YUE2_VAE` | `./models/YuE2-Vae` | Decoder path or HF repo id (or `YuE2-Vae-legacy`) |
 | `YUE2_OUTPUTS` | `./outputs` | Where songs are written |
+| `YUE2_SETS` | `./sets` | Where set JSON files and concatenated sets are written |
 | `YUE2_MEMORY_GIB` | `16` | VRAM budget. Lower to 12 forces small VAE tiles. |
 | `YUE2_DEVICE` | `cuda` | `cuda`, `mps`, or `cpu` |
 | `YUE2_BACKEND` | `torch`, or `torch-eager` on ROCm | AR backend. The CUDA-graph path needs flash-attention, so ROCm falls back to `torch-eager`. |
@@ -190,6 +244,8 @@ SheetSage2 transcription (~3 GB weights, separate env).
 ```
 app.py               FastAPI server + single-worker job queue
 static/index.html    single-page UI
+sets.py              playlists: storage, OpenRouter drafting, export, ffmpeg concat
+abcscore.py          length estimates from an ABC score or a lyric sheet
 cover_transcribe.py  SheetSage2 wrapper (runs in the sheetsage2 env)
 doctor.py            environment check
 setup_env.sh         generation env (torch 2.10 + yue2_infer + webUI)

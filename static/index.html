@@ -34,7 +34,7 @@
   label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 6px; }
   label:first-child { margin-top: 0; }
   label .hint { color: #626a7c; font-weight: 400; }
-  input[type=text], input[type=number], textarea, select {
+  input[type=text], input[type=number], input[type=password], textarea, select {
     width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 9px 11px; font: inherit; font-size: 13px; outline: none;
   }
@@ -43,6 +43,8 @@
   textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, monospace; }
   #lyrics { min-height: 220px; }
   #abc { min-height: 120px; }
+  input[type=file] { width: 100%; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; }
+  input[type=file]::file-selector-button { margin-right: 10px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
   .seed-wrap { display: flex; gap: 6px; }
@@ -109,6 +111,37 @@
   .hist button:disabled { opacity: .6; cursor: default; }
   .seg button:disabled { opacity: .45; cursor: not-allowed; }
   .empty { color: var(--muted); font-size: 12px; }
+  #tabs { max-width: 1400px; margin: 0 auto; padding: 18px 22px 0; }
+  #setsPanel { max-width: 1400px; margin: 0 auto; padding: 18px 22px 60px; }
+  .steps { display: flex; gap: 8px; margin: 4px 0 18px; flex-wrap: wrap; }
+  .steps .step { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 4px 12px; }
+  .steps .step.on { color: #fff; border-color: var(--accent); background: rgba(124, 92, 255, .18); }
+  .steps .step.done { color: var(--accent2); border-color: #24523f; }
+  .stepcard { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-top: 14px; background: var(--panel2); }
+  .stepcard.dim { opacity: .55; }
+  .stephead { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); margin-bottom: 10px; }
+  .stephead .badge { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; }
+  .setbar { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .setbar .live { color: var(--text); margin-top: 6px; font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .track { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; background: var(--panel); }
+  .track.open { border-color: #3d4454; }
+  .track .thead { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .track .torder { color: var(--muted); font-size: 12px; min-width: 20px; }
+  .track .ttitle { flex: 1; }
+  .track .test { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .track .tstatus { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .track .tstatus.done { color: var(--accent2); }
+  .track .tstatus.error { color: var(--danger); }
+  .track .lyricpeek { font-size: 11px; color: #6f7787; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track .tbody { display: none; }
+  .track.open .tbody { display: block; }
+  .track textarea { min-height: 58px; }
+  .track .tlyrics { min-height: 110px; }
+  .track audio.tplayer { width: 100%; height: 34px; margin-top: 10px; }
+  .track label { margin-top: 10px; }
+  .track .actions { margin-top: 10px; }
+  .track button { padding: 3px 8px; font-size: 12px; }
+  .track summary { cursor: pointer; font-size: 12px; color: var(--muted); }
   footer { color: #565e70; font-size: 11px; padding: 0 22px 30px; max-width: 1400px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 </style>
@@ -120,13 +153,17 @@
   <div id="modelState"><span class="dot" id="dot"></span><span id="modelText">checking&hellip;</span></div>
 </header>
 
-<main>
+<div id="tabs">
+  <div class="seg">
+    <button id="segCreate" class="active">Text &rarr; Song</button>
+    <button id="segCover">Audio &rarr; Cover</button>
+    <button id="segSets">Sets &rarr; YouTube</button>
+  </div>
+</div>
+
+<main id="songMain">
   <div>
     <div class="panel">
-      <div class="seg">
-        <button id="segCreate" class="active">Text &rarr; Song</button>
-        <button id="segCover">Audio &rarr; Cover</button>
-      </div>
 
       <div id="coverBox" style="display:none">
         <label>Reference audio <span class="hint">— SheetSage2 transcribes the melody, then YuE2 re-sings it</span></label>
@@ -181,15 +218,15 @@
           </div>
         </div>
         <div>
-          <label for="max_duration">Max duration (s) <span class="hint">blank = 360</span></label>
-          <input type="number" id="max_duration" min="1" max="900" step="1" placeholder="360">
+          <label for="max_duration">Max duration (s) <span class="hint">blank = auto, sized from the score and lyrics</span></label>
+          <input type="number" id="max_duration" min="1" max="900" step="1" placeholder="auto">
         </div>
         <div>
           <label for="cfg">CFG scale <span class="hint">blank = default</span></label>
           <input type="number" id="cfg" step="0.05" min="0" max="20" placeholder="1.0">
         </div>
       </div>
-      <div class="note">Duration is a cap: 25 codec frames per second. The song can end earlier. Max 900 s.</div>
+      <div class="note">Blank duration sizes the cap from the planned score (and the lyrics when there is no score), so the song is not cut mid-lyric. Set a number to force a cap. Max 900 s.</div>
 
       <div id="abcBox">
         <label for="abc">ABC score <span class="hint">— optional, requires melody or full mode</span></label>
@@ -257,6 +294,143 @@
   </div>
 </main>
 
+<section id="setsPanel" style="display:none">
+  <div class="panel">
+    <h2>Sets</h2>
+    <div class="note">Build a playlist for upload in three steps: configure the brief, review what the LLM wrote, then render and publish.</div>
+
+    <div class="steps" id="setSteps">
+      <span class="step" data-step="1">1 &middot; Configure</span>
+      <span class="step" data-step="2">2 &middot; Review the draft</span>
+      <span class="step" data-step="3">3 &middot; Render &amp; publish</span>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="setPick">Set</label>
+        <select id="setPick"></select>
+      </div>
+      <div>
+        <label for="setName">Name</label>
+        <input type="text" id="setName" placeholder="Vaporwave Night Drive Vol. 1">
+      </div>
+    </div>
+    <div class="actions">
+      <button class="ghost" id="setNew">New set</button>
+      <button class="ghost" id="setSave">Save</button>
+      <button class="ghost" id="setDelete">Delete</button>
+      <span class="spacer"></span>
+      <span class="note" id="setInfo"></span>
+    </div>
+
+    <div class="stepcard" id="stepConfig">
+      <div class="stephead"><span class="badge">1</span> Configure the set</div>
+
+      <details class="adv" id="orBox">
+        <summary>OpenRouter <span class="hint">— the key stays in this browser</span></summary>
+        <div class="row">
+          <div>
+            <label for="orKey">API key</label>
+            <input type="password" id="orKey" placeholder="sk-or-v1-..." autocomplete="off">
+          </div>
+          <div>
+            <label for="orModelFilter">Filter models</label>
+            <input type="text" id="orModelFilter" placeholder="type to filter">
+          </div>
+        </div>
+        <label for="orModel">Model</label>
+        <select id="orModel"></select>
+        <div class="actions">
+          <button class="ghost" id="orSaveKey">Save key</button>
+          <button class="ghost" id="orReload">Reload models</button>
+          <span class="note" id="orStatus"></span>
+        </div>
+      </details>
+
+      <label for="setBrief">Brief <span class="hint">— what the set is about; the LLM turns it into tracks</span></label>
+      <textarea id="setBrief" placeholder="one hour of dreamy 1980s vaporwave for a night drive: warm analog synths, nostalgic nocturnal mood, 88 BPM..."></textarea>
+      <div class="row3">
+        <div><label for="setMinutes">Target length (min) <span class="hint">guides the LLM</span></label><input type="number" id="setMinutes" value="60" min="1" max="600" step="1"></div>
+        <div><label for="setTrackCount">Tracks</label><input type="number" id="setTrackCount" value="12" min="1" max="40" step="1"></div>
+        <div><label for="setLanguage">Lyrics language</label><input type="text" id="setLanguage" value="English"></div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="setDurationMode">Track duration</label>
+          <select id="setDurationMode">
+            <option value="auto">auto — sized from each planned score and lyrics</option>
+            <option value="fixed">fixed — use the per-track estimate as a cap</option>
+          </select>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="setDraft">Draft with LLM</button>
+        <button class="ghost" id="setDraftAppend">Add tracks</button>
+        <span class="note">Draft replaces the whole tracklist. Add tracks keeps what you have and continues the set (rendered audio is preserved for tracks with the same title).</span>
+      </div>
+    </div>
+
+    <div class="stepcard dim" id="stepReview">
+      <div class="stephead"><span class="badge">2</span> Review and edit the draft</div>
+      <div class="setbar" id="setSummary">No tracks yet.</div>
+      <div class="actions">
+        <button class="primary" id="setRender" disabled>Render all missing tracks</button>
+        <button class="ghost" id="setCollapse">Expand all</button>
+      </div>
+      <div id="setTracks"></div>
+    </div>
+
+    <div class="stepcard dim" id="stepPublish">
+      <div class="stephead"><span class="badge">3</span> Join, illustrate and publish</div>
+      <div class="setbar" id="setPublishInfo">Nothing rendered yet.</div>
+
+      <label for="setBackground">Background image prompt <span class="hint">one image for the whole set</span></label>
+      <textarea id="setBackground" placeholder="a single 16:9 still that sits behind the whole set..."></textarea>
+      <div class="actions">
+        <button class="ghost" id="setCopyBg">Copy prompt</button>
+        <span class="note" id="setImageInfo"></span>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="setImage">Background image <span class="hint">png, jpg or webp</span></label>
+          <input type="file" id="setImage" accept="image/png,image/jpeg,image/webp">
+        </div>
+        <div>
+          <label for="setVideoSize">Video size</label>
+          <select id="setVideoSize">
+            <option value="1920x1080">1920x1080 (16:9)</option>
+            <option value="2560x1440">2560x1440 (16:9)</option>
+            <option value="1280x720">1280x720 (16:9)</option>
+            <option value="1080x1080">1080x1080 (square)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="setConcat">Concatenate audio</button>
+        <button class="primary" id="setVideo" disabled>Make video (image + audio)</button>
+        <button class="ghost" id="setExportYt">Export for YouTube</button>
+        <button class="ghost" id="setExportMd">Export Markdown</button>
+        <button class="ghost" id="setDownloadJson">Download JSON</button>
+        <button class="ghost" id="setDownload" style="display:none">Download audio</button>
+        <button class="ghost" id="setDownloadVideo" style="display:none">Download video</button>
+      </div>
+
+      <div id="setOutWrap" style="display:none">
+        <label for="setOut">Export</label>
+        <textarea id="setOut" spellcheck="false"></textarea>
+        <div class="actions">
+          <button class="ghost" id="setCopy">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="error" id="setError"></div>
+    <div class="note" id="setStatus"></div>
+  </div>
+</section>
+
 <footer>
   YuE2-3B (CC BY-NC 4.0) &middot; M-A-P &middot; SheetSage2 for covers &middot; runs locally, one job at a time.
 </footer>
@@ -276,9 +450,15 @@ function num(id) {
 function setMode(next) {
   if (next === "cover" && $("segCover").disabled) return;
   mode = next;
+  localStorage.setItem("yue2.mode", next);
   const cover = next === "cover";
-  $("segCreate").classList.toggle("active", !cover);
+  const setsTab = next === "sets";
+  $("segCreate").classList.toggle("active", next === "create");
   $("segCover").classList.toggle("active", cover);
+  $("segSets").classList.toggle("active", setsTab);
+  $("songMain").style.display = setsTab ? "none" : "";
+  $("setsPanel").style.display = setsTab ? "" : "none";
+  if (setsTab) { openSets(); return; }
   $("coverBox").style.display = cover ? "" : "none";
   $("abcBox").style.display = cover ? "none" : "";
   $("planOnlyCheck").style.display = cover ? "none" : "";
@@ -522,6 +702,22 @@ async function cancel() {
   $("cancel").disabled = true;
 }
 
+function playInResultPanel(row) {
+  if (!row.audio) return;
+  const player = $("player");
+  $("result").classList.add("on");
+  player.style.display = "";
+  player.src = row.audio + "?inline=1&t=" + Date.now();
+  const download = $("download");
+  download.style.display = "";
+  download.onclick = () => {
+    const link = document.createElement("a");
+    link.href = row.audio;
+    link.download = "";
+    link.click();
+  };
+}
+
 async function refreshHistory() {
   try {
     const rows = await (await fetch("/api/history")).json();
@@ -538,14 +734,748 @@ async function refreshHistory() {
       const tag = r.cover ? "cover" : "song";
       b.innerHTML = `<b>${tag} \u00b7 seed ${r.seed}</b>${secs}${took}${badge}<div class="s">${(r.style || "").replace(/</g,"&lt;")}</div>`;
       if (dead || !r.audio) b.disabled = true;
-      b.onclick = () => { if (r.audio) window.open(r.audio, "_blank"); };
+          b.onclick = () => playInResultPanel(r);
       box.appendChild(b);
     }
   } catch (e) { /* ignore */ }
 }
 
+// --- sets / playlists -----------------------------------------------------
+
+const OR_KEY = "yue2.orKey";
+const OR_MODEL = "yue2.orModel";
+let setsList = [];
+let setData = null;
+let setId = null;
+let orModels = [];
+let setSaveTimer = null;
+let setPollTimer = null;
+let setsOpened = false;
+let lastAudioSig = "";
+
+const esc = (value) => String(value == null ? "" : value)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+async function jfetch(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      } else if (Array.isArray(body.detail)) {
+        detail = body.detail.map((entry) => {
+          const where = Array.isArray(entry.loc)
+            ? entry.loc.filter((part) => part !== "body").join(".") : "";
+          return (where ? where + ": " : "") + (entry.msg || JSON.stringify(entry));
+        }).join("; ");
+      } else if (body.detail) {
+        detail = JSON.stringify(body.detail);
+      }
+    } catch (e) { /* keep statusText */ }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+function setError(message) {
+  const el = $("setError");
+  el.textContent = message || "";
+  el.classList.toggle("on", !!message);
+}
+
+function setStatus(message) {
+  $("setStatus").textContent = message || "";
+}
+
+function initSets() {
+  $("orKey").value = localStorage.getItem(OR_KEY) || "";
+  $("orModelFilter").oninput = fillModels;
+  $("orModel").onchange = () => localStorage.setItem(OR_MODEL, $("orModel").value);
+  $("orSaveKey").onclick = () => {
+    localStorage.setItem(OR_KEY, $("orKey").value.trim());
+    setStatus("key saved in this browser");
+  };
+  $("orReload").onclick = () => loadModels(true);
+  $("setPick").onchange = () => loadSet($("setPick").value);
+  $("setDurationMode").onchange = () => queueSave();
+  $("setCollapse").onclick = toggleAllCards;
+  $("setNew").onclick = newSet;
+  $("setSave").onclick = () => saveSet(true);
+  $("setDelete").onclick = deleteSet;
+  $("setDraft").onclick = () => draftSet(false);
+  $("setDraftAppend").onclick = () => draftSet(true);
+  $("setRender").onclick = renderSet;
+  $("setConcat").onclick = concatSet;
+  $("setExportYt").onclick = () => exportSet("youtube");
+  $("setExportMd").onclick = () => exportSet("md");
+  $("setDownloadJson").onclick = downloadJson;
+  $("setCopy").onclick = () => {
+    navigator.clipboard.writeText($("setOut").value);
+    setStatus("copied");
+  };
+  $("setDownload").onclick = () => window.open(`/api/sets/${setId}/audio`, "_blank");
+  $("setDownloadVideo").onclick = () => window.open(`/api/sets/${setId}/video-file`, "_blank");
+  $("setImage").onchange = uploadImage;
+  $("setVideo").onclick = makeVideo;
+  $("setCopyBg").onclick = () => {
+    navigator.clipboard.writeText($("setBackground").value);
+    setStatus("background prompt copied");
+  };
+  $("setBackground").oninput = () => queueSave();
+  $("setTracks").addEventListener("input", onTrackInput);
+  $("setTracks").addEventListener("click", onTrackClick);
+  // media errors do not bubble, so listen in the capture phase
+  $("setTracks").addEventListener("error", (event) => {
+    if (event.target && event.target.tagName === "AUDIO") {
+      setError("this track's audio failed to load in the player — use Download audio");
+    }
+  }, true);
+}
+
+function openSets() {
+  if (setsOpened) return;
+  setsOpened = true;
+  loadModels(false);
+  loadSets();
+}
+
+async function loadModels(force) {
+  if (orModels.length && !force) { fillModels(); return; }
+  setStatus("loading the model list...");
+  try {
+    const data = await jfetch(`/api/llm/models${force ? "?refresh=true" : ""}`);
+    orModels = data.models || [];
+    fillModels();
+    setStatus(orModels.length + " models available");
+  } catch (e) {
+    setError(String(e.message));
+    setStatus("");
+  }
+}
+
+function fillModels() {
+  const needle = $("orModelFilter").value.trim().toLowerCase();
+  const wanted = $("orModel").value || localStorage.getItem(OR_MODEL) || "";
+  const rows = orModels
+    .filter((m) => !needle || (m.id + " " + m.name).toLowerCase().includes(needle))
+    .slice(0, 300);
+  $("orModel").innerHTML = rows.map((m) => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join("");
+  if (wanted && rows.some((m) => m.id === wanted)) $("orModel").value = wanted;
+}
+
+async function loadSets() {
+  try {
+    await refreshPicker();
+    if (setId) await loadSet(setId);
+    else if (setsList.length) await loadSet(setsList[0].id);
+    else { setData = null; renderTracks(); updateSetInfo(); }
+  } catch (e) {
+    setError(String(e.message));
+  }
+}
+
+async function refreshPicker() {
+  setsList = await jfetch("/api/sets");
+  $("setPick").innerHTML = setsList.length
+    ? setsList.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} — ${s.rendered}/${s.songs} tracks</option>`).join("")
+    : '<option value="">(no sets yet)</option>';
+  if (setId && setsList.some((s) => s.id === setId)) $("setPick").value = setId;
+}
+
+async function loadSet(id) {
+  if (!id) return;
+  setId = id;
+  setData = await jfetch(`/api/sets/${id}`);
+  $("setPick").value = id;
+  $("setName").value = setData.name || "";
+  $("setBrief").value = setData.brief || "";
+  $("setBackground").value = setData.background || "";
+  $("setMinutes").value = setData.target_minutes || 60;
+  $("setDurationMode").value = setData.duration_mode || "auto";
+  if (setData.model && orModels.some((m) => m.id === setData.model)) {
+    $("orModel").value = setData.model;
+    localStorage.setItem(OR_MODEL, setData.model);
+  }
+  renderTracks();
+  updateSetInfo();
+  updateMediaState();
+  if ((setData.songs || []).some((s) => s.job && !["done", "error", "cancelled"].includes(s.job.status))) startSetPoll();
+}
+
+function isBusy(song) {
+  return !!(song.job && !["done", "error", "cancelled"].includes(song.job.status));
+}
+
+function liveLine(songs) {
+  const active = songs.find(isBusy);
+  if (!active) return "";
+  const job = active.job;
+  const sub = job.sub_progress && job.sub_progress.total
+    ? ` ${job.sub_progress.completed}/${job.sub_progress.total}` : "";
+  const tokens = job.stage_tokens
+    ? ` · ${job.stage_tokens}${job.target_tokens ? "/" + job.target_tokens : ""} tok` : "";
+  const eta = job.eta_seconds != null ? ` · ~${fmtDur(job.eta_seconds)} left` : "";
+  return `<div class="live">&#9654; track ${active.order} &middot; ${esc(active.title)} &middot; `
+    + `${esc(job.stage || job.status)}${sub}${tokens} &middot; ${fmtDur(job.elapsed)} elapsed${eta}</div>`;
+}
+
+function updateMediaState() {
+  const image = (setData && setData.image) || null;
+  const video = (setData && setData.video) || null;
+  const concat = (setData && setData.concat) || null;
+  const rendered = (setData && (setData.songs || []).filter((s) => s.audio_seconds).length) || 0;
+  $("setImageInfo").textContent = image
+    ? `image: ${image.file} · ${(image.bytes / 1048576).toFixed(1)} MB`
+    : "no image yet — generate one from the prompt above, then upload it here";
+  $("setVideo").disabled = !(image && rendered);
+  const audioButton = $("setDownload");
+  audioButton.style.display = concat ? "" : "none";
+  if (concat) audioButton.textContent = `Download audio (${(concat.bytes / 1048576).toFixed(1)} MB)`;
+  const videoButton = $("setDownloadVideo");
+  videoButton.style.display = video ? "" : "none";
+  if (video) videoButton.textContent = `Download video (${(video.bytes / 1048576).toFixed(1)} MB)`;
+}
+
+async function uploadImage() {
+  const input = $("setImage");
+  if (!input.files || !input.files[0] || !setId) return;
+  setError("");
+  setStatus("uploading image...");
+  const form = new FormData();
+  form.append("image", input.files[0]);
+  try {
+    const response = await fetch(`/api/sets/${setId}/image`, { method: "POST", body: form });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+    }
+    const fresh = await jfetch(`/api/sets/${setId}`);
+    setData.image = fresh.image;
+    setData.video = fresh.video;
+    updateMediaState();
+    setStatus("image uploaded — now make the video");
+  } catch (e) {
+    setError(String(e.message));
+    setStatus("");
+  }
+}
+
+async function makeVideo() {
+  if (!setId) return;
+  setError("");
+  const [width, height] = ($("setVideoSize").value || "1920x1080").split("x").map(Number);
+  const button = $("setVideo");
+  button.disabled = true;
+  setStatus("rendering the video with ffmpeg — a one hour set takes a few minutes...");
+  try {
+    await saveSet(false);
+    const out = await jfetch(`/api/sets/${setId}/video`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ width: width, height: height, fps: 2 }),
+    });
+    const fresh = await jfetch(`/api/sets/${setId}`);
+    setData.video = fresh.video;
+    updateMediaState();
+    setStatus(`${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`);
+  } catch (e) {
+    setError(String(e.message));
+    setStatus("");
+    updateMediaState();
+  }
+}
+
+function updateSetInfo() {
+  if (!setData) {
+    $("setInfo").textContent = "";
+    $("setSummary").innerHTML = "No tracks yet. Fill step 1 and hit Draft with LLM.";
+    $("setPublishInfo").textContent = "Nothing rendered yet.";
+    updateSteps(0, 0, 0, false);
+    updateMediaState();
+    return;
+  }
+  const songs = setData.songs || [];
+  const rendered = songs.filter((s) => s.audio_seconds);
+  const done = rendered.reduce((sum, s) => sum + Number(s.audio_seconds), 0);
+  const planned = songs.reduce((sum, s) => sum + Number(s.target_seconds || 0), 0);
+  const busy = songs.some(isBusy);
+  $("setInfo").textContent = `${songs.length} tracks · ${rendered.length} rendered`;
+  $("setSummary").innerHTML = songs.length
+    ? `${songs.length} tracks &middot; estimated ${fmtDur(planned)} &middot; rendered `
+      + `${rendered.length}/${songs.length} (${fmtDur(done)})` + liveLine(songs)
+    : "No tracks yet. Fill step 1 and hit Draft with LLM.";
+  $("setPublishInfo").textContent = rendered.length
+    ? `${rendered.length}/${songs.length} rendered · ${fmtDur(done)} total`
+      + (rendered.length < songs.length ? " — render the rest first" : " — ready to join")
+    : "Nothing rendered yet. Finish step 2 first.";
+  updateSteps(songs.length, rendered.length, songs.length, busy);
+  updateMediaState();
+}
+
+function updateSteps(total, rendered, all, busy) {
+  const step = total === 0 ? 1 : (rendered < all ? 2 : 3);
+  document.querySelectorAll("#setSteps .step").forEach((el) => {
+    const number = Number(el.dataset.step);
+    el.classList.toggle("on", number === step);
+    el.classList.toggle("done", number < step);
+  });
+  $("stepReview").classList.toggle("dim", total === 0);
+  $("stepPublish").classList.toggle("dim", rendered === 0);
+  const button = $("setRender");
+  button.disabled = total === 0 || rendered >= all || !!busy;
+  button.textContent = busy ? "Rendering…" : "Render all missing tracks";
+}
+
+function songStatus(song) {
+  const job = song.job;
+  if (job && !["done", "error", "cancelled"].includes(job.status)) {
+    const sub = job.sub_progress && job.sub_progress.total
+      ? ` ${job.sub_progress.completed}/${job.sub_progress.total}` : "";
+    const eta = job.eta_seconds != null ? ` ~${fmtDur(job.eta_seconds)}` : "";
+    return { cls: "", text: `${job.stage || job.status}${sub}${eta}` };
+  }
+  if (song.status === "error" || (job && job.status === "error")) return { cls: "error", text: "error" };
+  if (song.audio_seconds) return { cls: "done", text: fmtDur(song.audio_seconds) };
+  if (song.status === "cancelled") return { cls: "", text: "cancelled" };
+  return { cls: "", text: "not rendered" };
+}
+
+function trackHtml(song) {
+  const status = songStatus(song);
+  const hasAudio = !!(song.job_id && song.audio);
+  const firstLine = (song.lyrics || "").split("\n").filter((l) => l.trim() && !l.trim().startsWith("["))[0];
+  const peek = firstLine || song.style || "(no lyrics yet)";
+  const player = hasAudio
+    ? `<audio class="tplayer" controls preload="metadata" src="/api/job/${esc(song.job_id)}/audio?inline=1"></audio>`
+    : "";
+  const renderLabel = hasAudio ? "Re-render" : "Render";
+  return `
+  <div class="track" data-id="${esc(song.id)}">
+    <div class="thead">
+      <span class="torder">${song.order}</span>
+      <input type="text" class="ttitle" value="${esc(song.title)}" placeholder="Title">
+      <span class="test">~${esc(song.target_seconds)}s</span>
+      <span class="tstatus ${status.cls}">${esc(status.text)}</span>
+      <button class="ghost" data-act="up" title="Move up">&#8593;</button>
+      <button class="ghost" data-act="down" title="Move down">&#8595;</button>
+      <button class="ghost" data-act="gen" title="${hasAudio ? "Render this track again" : "Render this track"}">${renderLabel}</button>
+      <button class="ghost" data-act="del" title="Remove this track">&#10005;</button>
+    </div>
+    <div class="lyricpeek">${esc(peek)}</div>
+    <div class="tbody">
+      ${player}
+      <div class="row3">
+        <div><label>Estimate (s) <span class="hint">LLM guess</span></label><input type="number" class="tsecs" min="60" max="900" step="1" value="${esc(song.target_seconds)}"></div>
+        <div><label>Seed</label><input type="number" class="tseed" value="${song.seed == null ? "" : esc(song.seed)}"></div>
+        <div><label>Job</label><input type="text" value="${esc(song.job_id || "")}" readonly></div>
+      </div>
+      <label>Style</label><textarea class="tstyle">${esc(song.style)}</textarea>
+      <label>Lyrics</label><textarea class="tlyrics">${esc(song.lyrics)}</textarea>
+      <div class="actions">
+        <button class="ghost" data-act="gen">${hasAudio ? "Re-render this track" : "Render this track"}</button>
+        <button class="ghost" data-act="download" ${hasAudio ? "" : "disabled"}>Download audio</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderTracks() {
+  if (!setData || !(setData.songs || []).length) {
+    $("setTracks").innerHTML =
+      '<div class="note">No tracks yet. Write a brief in step 1 and hit <b>Draft with LLM</b>.</div>';
+    lastAudioSig = "";
+    return;
+  }
+  $("setTracks").innerHTML = setData.songs.map(trackHtml).join("");
+  lastAudioSig = audioSignature();
+}
+
+function audioSignature() {
+  return (setData && setData.songs ? setData.songs : [])
+    .map((song) => (song.audio_seconds ? "1" : "0")).join("");
+}
+
+function renderTracksPreserving() {
+  const openCard = document.querySelector("#setTracks .track.open");
+  const openId = openCard ? openCard.dataset.id : "";
+  renderTracks();
+  if (openId) {
+    const card = document.querySelector(`#setTracks .track[data-id="${openId}"]`);
+    if (card) card.classList.add("open");
+  }
+}
+
+function updateStatuses() {
+  if (!setData) return;
+  document.querySelectorAll("#setTracks .track").forEach((card) => {
+    const song = (setData.songs || []).find((s) => s.id === card.dataset.id);
+    if (!song) return;
+    const status = songStatus(song);
+    const el = card.querySelector(".tstatus");
+    el.className = "tstatus " + status.cls;
+    el.textContent = status.text;
+  });
+}
+
+function findSong(id) {
+  return (setData && (setData.songs || []).find((s) => s.id === id)) || null;
+}
+
+function reorder() {
+  (setData.songs || []).forEach((song, index) => { song.order = index + 1; });
+}
+
+function onTrackInput(event) {
+  const card = event.target.closest(".track");
+  const song = card && findSong(card.dataset.id);
+  if (!song) return;
+  const cls = event.target.className;
+  if (cls.includes("ttitle")) song.title = event.target.value;
+  else if (cls.includes("tstyle")) song.style = event.target.value;
+  else if (cls.includes("tlyrics")) song.lyrics = event.target.value;
+  else if (cls.includes("tsecs")) song.target_seconds = Number(event.target.value) || song.target_seconds;
+  else if (cls.includes("tseed")) song.seed = event.target.value === "" ? null : Number(event.target.value);
+  queueSave();
+}
+
+function onTrackClick(event) {
+  const button = event.target.closest("button[data-act]");
+  if (button) {
+    const card = button.closest(".track");
+    const song = card && findSong(card.dataset.id);
+    if (!song) return;
+    const act = button.dataset.act;
+    if (act === "up") moveSong(song, -1);
+    else if (act === "down") moveSong(song, 1);
+    else if (act === "del") removeSong(song);
+    else if (act === "gen") renderOne(song);
+    else if (act === "download") downloadSong(song);
+    return;
+  }
+  const tag = (event.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  const card = event.target.closest(".track");
+  if (card) toggleCard(card);
+}
+
+function toggleCard(card) {
+  const wasOpen = card.classList.contains("open");
+  document.querySelectorAll("#setTracks .track.open").forEach((el) => el.classList.remove("open"));
+  if (!wasOpen) card.classList.add("open");
+}
+
+function toggleAllCards() {
+  const cards = Array.from(document.querySelectorAll("#setTracks .track"));
+  if (!cards.length) return;
+  const expand = cards.some((card) => !card.classList.contains("open"));
+  cards.forEach((card) => card.classList.toggle("open", expand));
+  $("setCollapse").textContent = expand ? "Collapse all" : "Expand all";
+}
+
+function moveSong(song, delta) {
+  const list = setData.songs;
+  const from = list.indexOf(song);
+  const to = from + delta;
+  if (to < 0 || to >= list.length) return;
+  list.splice(to, 0, list.splice(from, 1)[0]);
+  reorder();
+  renderTracks();
+  queueSave();
+}
+
+function removeSong(song) {
+  setData.songs = setData.songs.filter((s) => s !== song);
+  reorder();
+  renderTracks();
+  updateSetInfo();
+  queueSave();
+}
+
+function downloadSong(song) {
+  if (!song.job_id || !song.audio) { setError("this track has no rendered audio yet"); return; }
+  const link = document.createElement("a");
+  link.href = `/api/job/${song.job_id}/audio`;
+  link.download = "";
+  link.click();
+}
+
+function queueSave() {
+  clearTimeout(setSaveTimer);
+  setSaveTimer = setTimeout(() => saveSet(false), 800);
+}
+
+async function saveSet(explicit) {
+  if (!setData || !setId) return;
+  clearTimeout(setSaveTimer);
+  setData.name = $("setName").value.trim() || "Untitled set";
+  setData.brief = $("setBrief").value;
+  setData.background = $("setBackground").value;
+  setData.target_minutes = Number($("setMinutes").value) || 60;
+  setData.duration_mode = $("setDurationMode").value;
+  try {
+    setData = await jfetch(`/api/sets/${setId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(setData),
+    });
+    updateSetInfo();
+    if (explicit) setStatus("saved");
+  } catch (e) {
+    setError(String(e.message));
+  }
+}
+
+async function newSet() {
+  setError("");
+  try {
+    const created = await jfetch("/api/sets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: $("setName").value.trim() || "Untitled set",
+        target_minutes: Number($("setMinutes").value) || 60,
+        brief: $("setBrief").value,
+      }),
+    });
+    setId = created.id;
+    await refreshPicker();
+    await loadSet(created.id);
+    setStatus("new set created");
+  } catch (e) {
+    setError(String(e.message));
+  }
+}
+
+async function deleteSet() {
+  if (!setId) return;
+  if (!confirm("Delete this set and its concatenated file?")) return;
+  try {
+    await jfetch(`/api/sets/${setId}`, { method: "DELETE" });
+    setId = null;
+    setData = null;
+    $("setOutWrap").style.display = "none";
+    $("setDownload").style.display = "none";
+    await loadSets();
+    setStatus("deleted");
+  } catch (e) {
+    setError(String(e.message));
+  }
+}
+
+async function draftSet(append) {
+  setError("");
+  if (!setId) { setError("create or pick a set first"); return; }
+  const key = $("orKey").value.trim() || localStorage.getItem(OR_KEY) || "";
+  if (!key) {
+    setError("paste your OpenRouter key in the OpenRouter section");
+    $("orBox").open = true;
+    return;
+  }
+  const model = $("orModel").value;
+  if (!model) {
+    setError("pick a model");
+    $("orBox").open = true;
+    return;
+  }
+  localStorage.setItem(OR_KEY, key);
+  $("setDraft").disabled = true;
+  $("setDraftAppend").disabled = true;
+  setStatus(append ? `adding tracks with ${model}...` : `drafting with ${model}...`);
+  try {
+    setData = await jfetch(`/api/sets/${setId}/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: key,
+        model: model,
+        brief: $("setBrief").value,
+        target_minutes: Number($("setMinutes").value) || 60,
+        track_count: Number($("setTrackCount").value) || 12,
+        language: $("setLanguage").value.trim() || "English",
+        append: !!append,
+      }),
+    });
+    $("setName").value = setData.name || "";
+    $("setBackground").value = setData.background || "";
+    renderTracks();
+    updateSetInfo();
+    refreshPicker();
+    const first = document.querySelector("#setTracks .track");
+    if (first) first.classList.add("open");
+    $("stepReview").scrollIntoView({ behavior: "smooth", block: "start" });
+    setStatus(
+      (append ? `added tracks — now ${(setData.songs || []).length} in the set` : `drafted ${(setData.songs || []).length} tracks`)
+      + " — review them in step 2"
+    );
+  } catch (e) {
+    setError(String(e.message));
+    setStatus("");
+  } finally {
+    $("setDraft").disabled = false;
+    $("setDraftAppend").disabled = false;
+  }
+}
+
+async function renderSet() {
+  setError("");
+  if (!setId) return;
+  const button = $("setRender");
+  button.disabled = true;
+  button.textContent = "Queuing…";
+  try {
+    await saveSet(false);
+    const out = await jfetch(`/api/sets/${setId}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ only_missing: true }),
+    });
+    setStatus(out.queued.length
+      ? `${out.queued.length} track(s) queued — the worker picks them up one at a time`
+      : "nothing to queue: every track already has audio");
+    await pollSetOnce();
+    startSetPoll();
+  } catch (e) {
+    setError(String(e.message));
+    updateSetInfo();
+  }
+}
+
+async function renderOne(song) {
+  setError("");
+  const button = $("setRender");
+  button.disabled = true;
+  button.textContent = "Queuing…";
+  try {
+    await saveSet(false);
+    const out = await jfetch(`/api/sets/${setId}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ only_missing: false, song_id: song.id }),
+    });
+    setStatus(out.queued.length ? "track queued" : "nothing to queue");
+    await pollSetOnce();
+    startSetPoll();
+  } catch (e) {
+    setError(String(e.message));
+    updateSetInfo();
+  }
+}
+
+function mergeJobs(fresh) {
+  if (!setData) return;
+  const byId = {};
+  (fresh.songs || []).forEach((song) => { byId[song.id] = song; });
+  (setData.songs || []).forEach((song) => {
+    const other = byId[song.id];
+    if (!other) return;
+    song.job = other.job;
+    song.status = other.status;
+    song.audio = other.audio;
+    song.audio_seconds = other.audio_seconds;
+    song.job_id = other.job_id;
+    song.seed = other.seed;
+  });
+}
+
+async function pollSetOnce() {
+  if (!setId) return false;
+  try {
+    const fresh = await jfetch(`/api/sets/${setId}`);
+    mergeJobs(fresh);
+    // a track that just finished needs its player and download button
+    if (audioSignature() !== lastAudioSig) renderTracksPreserving();
+    updateStatuses();
+    updateSetInfo();
+    return (fresh.songs || []).some(isBusy);
+  } catch (e) {
+    return false;
+  }
+}
+
+function startSetPoll() {
+  if (setPollTimer) return;
+  const tick = async () => {
+    const busy = await pollSetOnce();
+    if (busy) return;
+    stopSetPoll();
+    refreshPicker();
+    updateSetInfo();
+    setStatus("render finished — step 3 is ready");
+    $("stepPublish").scrollIntoView({ behavior: "smooth", block: "start" });
+    // the set file is written a moment after the job ends
+    setTimeout(refreshPicker, 1500);
+  };
+  tick();
+  setPollTimer = setInterval(tick, 3000);
+}
+
+function stopSetPoll() {
+  if (setPollTimer) {
+    clearInterval(setPollTimer);
+    setPollTimer = null;
+  }
+}
+
+async function concatSet() {
+  setError("");
+  if (!setId) return;
+  $("setConcat").disabled = true;
+  setStatus("concatenating with ffmpeg...");
+  try {
+    const out = await jfetch(`/api/sets/${setId}/concat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "mp3", bitrate: "320k" }),
+    });
+    setData.concat = { file: out.file, bytes: out.bytes, download: out.download };
+    updateMediaState();
+    setStatus(`${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`);
+  } catch (e) {
+    setError(String(e.message));
+    setStatus("");
+  } finally {
+    $("setConcat").disabled = false;
+  }
+}
+
+async function exportSet(format) {
+  setError("");
+  if (!setId) return;
+  try {
+    const response = await fetch(`/api/sets/${setId}/export?format=${format}`);
+    if (!response.ok) throw new Error(response.statusText);
+    $("setOutWrap").style.display = "";
+    $("setOut").value = await response.text();
+    setStatus(format === "youtube" ? "YouTube description ready" : "markdown ready");
+  } catch (e) {
+    setError(String(e.message));
+  }
+}
+
+async function downloadJson() {
+  if (!setId) return;
+  try {
+    const response = await fetch(`/api/sets/${setId}/export?format=json`);
+    const text = await response.text();
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${String(setData.name || "set").replace(/[^\w\-]+/g, "_")}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    setError(String(e.message));
+  }
+}
+
 $("segCreate").onclick = () => setMode("create");
 $("segCover").onclick = () => setMode("cover");
+$("segSets").onclick = () => setMode("sets");
+initSets();
+if (localStorage.getItem("yue2.mode") === "sets") setMode("sets");
 $("generate").onclick = generate;
 $("cancel").onclick = cancel;
 $("instrumental").onchange = toggleInstrumental;

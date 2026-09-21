@@ -1,5 +1,6 @@
 models/
 outputs/
+sets/
 *.log
 *.whl
 __pycache__/

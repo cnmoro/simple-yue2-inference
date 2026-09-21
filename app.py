@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -26,8 +27,11 @@ from pathlib import Path
 import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
+
+import sets
+from abcscore import auto_seconds, FRAMES_PER_SECOND
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = Path(os.environ.get("YUE2_MODEL", ROOT / "models/YuE2-3B"))
@@ -483,6 +487,22 @@ def run_job(job: Job):
         note(job, "plan only: no audio requested")
         return
 
+    if not params.get("max_duration"):
+        # Blank duration: size the cap from what the score and lyrics actually need,
+        # instead of guessing a number that would cut the song short.
+        from yue2.protocol import CONTEXT
+
+        raw = auto_seconds(plan.abc, params.get("lyrics"), margin=1.0)
+        margin = 1.4 if plan.truncated else 1.15
+        frames = max(1, min(int(round(raw * margin * FRAMES_PER_SECOND)), CONTEXT - len(plan.prefix) - 1))
+        sampling = dict(sampling or {})
+        sampling["max_tokens"] = frames
+        sampling["min_tokens"] = min(200, frames)
+        semantic_target = frames
+        params["auto_seconds"] = round(raw, 1)
+        params["auto_tokens"] = frames
+        note(job, f"auto duration: score/lyrics need ~{raw:.0f}s -> cap {frames / FRAMES_PER_SECOND:.0f}s")
+
     start_stage("generating", semantic_target)
     cap = f" (cap {semantic_target} tokens = {semantic_target / FRAMES_PER_SECOND:.0f}s)" if semantic_target else ""
     note(job, f"generating song tokens{cap}")
@@ -561,6 +581,9 @@ def worker():
             (directory / "meta.json").write_text(
                 json.dumps(job.meta(), indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            set_id, song_id = job.params.get("set_id"), job.params.get("song_id")
+            if set_id and song_id:
+                sets.record_job_result(str(set_id), str(song_id), job)
             STATE.current = None
             STATE.queue.task_done()
 
@@ -692,14 +715,16 @@ def api_cancel(job_id: str):
 
 
 @app.get("/api/job/{job_id}/audio")
-def api_audio(job_id: str):
-    job = STATE.get(job_id)
-    if not job.audio:
+def api_audio(job_id: str, inline: bool = False):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", job_id):
+        raise HTTPException(422, "bad job id")
+    path = sets.resolve_audio_file(job_id)
+    if path is None:
         raise HTTPException(404, "no audio for this job")
-    path = OUTPUTS / job.id / job.audio
-    if not path.exists():
-        raise HTTPException(404, "audio file missing")
-    return FileResponse(path, filename=f"yue2-{job.id}.{path.suffix.lstrip('.')}")
+    if inline:
+        # No filename: omit Content-Disposition so the browser plays it in place.
+        return FileResponse(path)
+    return FileResponse(path, filename=f"yue2-{job_id}.{path.suffix.lstrip('.')}")
 
 
 @app.get("/api/history")
@@ -724,6 +749,284 @@ def api_history():
             }
         )
     return rows[:50]
+
+
+class SetCreate(BaseModel):
+    name: str = Field(default="", max_length=200)
+    target_minutes: float = Field(default=60, ge=1, le=600)
+    brief: str = Field(default="", max_length=8000)
+
+
+class SetDraft(BaseModel):
+    api_key: str = Field(min_length=8)
+    model: str = Field(min_length=1, max_length=200)
+    brief: str = Field(default="", max_length=8000)
+    target_minutes: float = Field(default=60, ge=1, le=600)
+    track_count: int = Field(default=12, ge=1, le=40)
+    language: str = Field(default="English", max_length=60)
+    append: bool = False
+
+
+class SetRender(BaseModel):
+    only_missing: bool = True
+    song_id: str | None = Field(default=None, max_length=40)
+    ode_steps: int | None = Field(default=None, ge=1, le=256)
+    max_abc_tokens: int = Field(default=12000, ge=1, le=20000)
+
+
+class SetConcat(BaseModel):
+    format: str = Field(default="mp3", pattern="^(mp3|wav)$")
+    bitrate: str = Field(default="320k", max_length=12)
+
+
+class SetVideo(BaseModel):
+    width: int = Field(default=1920, ge=320, le=3840)
+    height: int = Field(default=1080, ge=240, le=2160)
+    fps: int = Field(default=2, ge=1, le=30)
+    crf: int = Field(default=23, ge=0, le=51)
+    bitrate: str = Field(default="320k", max_length=12)
+
+
+def _load_set_or_404(set_id: str) -> dict:
+    try:
+        return sets.reconcile(sets.load_set(set_id))
+    except FileNotFoundError:
+        raise HTTPException(404, "unknown set") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/llm/models")
+def api_llm_models(refresh: bool = False):
+    try:
+        return {"models": sets.openrouter_models(force=refresh)}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/api/sets")
+def api_sets():
+    return sets.list_sets()
+
+
+@app.post("/api/sets")
+def api_set_create(req: SetCreate):
+    return sets.create_set(req.name, req.target_minutes, req.brief)
+
+
+def _enrich(set_id: str, data: dict) -> dict:
+    """Attach live job state and the derived files the UI needs to show."""
+    for song in data.get("songs") or []:
+        job = STATE.jobs.get(str(song.get("job_id") or ""))
+        song["job"] = job.public() if job is not None else None
+    for name in ("set.mp3", "set.wav"):
+        path = sets.SETS_DIR / set_id / name
+        if path.is_file():
+            data["concat"] = {
+                "file": name,
+                "bytes": path.stat().st_size,
+                "download": f"/api/sets/{set_id}/audio",
+            }
+            break
+    image = sets.background_path(set_id)
+    data["image"] = {"file": image.name, "bytes": image.stat().st_size} if image else None
+    video = sets.video_path(set_id)
+    data["video"] = (
+        {"file": video.name, "bytes": video.stat().st_size, "download": f"/api/sets/{set_id}/video-file"}
+        if video
+        else None
+    )
+    return data
+
+
+@app.get("/api/sets/{set_id}")
+def api_set_get(set_id: str):
+    return _enrich(set_id, _load_set_or_404(set_id))
+
+
+@app.put("/api/sets/{set_id}")
+def api_set_save(set_id: str, data: dict):
+    _load_set_or_404(set_id)
+    data["id"] = set_id
+    return _enrich(set_id, sets.save_set(data))
+
+
+@app.delete("/api/sets/{set_id}")
+def api_set_delete(set_id: str):
+    _load_set_or_404(set_id)
+    sets.delete_set(set_id)
+    return {"ok": True}
+
+
+@app.post("/api/sets/{set_id}/draft")
+def api_set_draft(set_id: str, req: SetDraft):
+    data = _load_set_or_404(set_id)
+    existing = data.get("songs") or []
+    messages = sets.build_set_messages(
+        req.brief or data.get("brief", ""),
+        req.target_minutes,
+        req.track_count,
+        req.language,
+        existing=existing if req.append else None,
+    )
+    try:
+        content = sets.openrouter_chat(req.api_key, req.model, messages, max_tokens=12000)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc)) from exc
+    try:
+        name, background, songs = sets.songs_from_llm(sets.parse_json_object(content), req.target_minutes)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            502,
+            f"could not use the model reply ({exc}). Try a model with a larger output limit, "
+            "or ask for fewer tracks.",
+        ) from exc
+    old_signature = sets.tracklist_signature(existing)
+    if req.append:
+        songs = sets.merge_tracks(existing, songs)
+    else:
+        sets.carry_rendered(existing, songs)
+    data["songs"] = songs
+    data["name"] = name or data.get("name") or "Untitled set"
+    data["background"] = background or data.get("background", "")
+    data["brief"] = req.brief or data.get("brief", "")
+    data["target_minutes"] = req.target_minutes
+    data["model"] = req.model
+    if sets.tracklist_signature(songs) != old_signature:
+        # the derived audio/video belong to the previous tracklist
+        sets.clear_renders(set_id)
+    return _enrich(set_id, sets.save_set(data))
+
+
+@app.post("/api/sets/{set_id}/render")
+def api_set_render(set_id: str, req: SetRender):
+    data = _load_set_or_404(set_id)
+    auto = (data.get("duration_mode") or "auto") == "auto"
+    queued = []
+    for song in sorted(data["songs"], key=lambda s: int(s["order"])):
+        if req.song_id and song["id"] != req.song_id:
+            continue
+        if not (song.get("style") or song.get("lyrics")):
+            continue
+        if req.only_missing and song.get("audio_seconds"):
+            continue
+        seed = random.randint(0, 2**31 - 1)
+        params = {
+            "style": song.get("style") or "instrumental",
+            "lyrics": song.get("lyrics") or "",
+            "cot": "full",
+            "seed": seed,
+            "abc": None,
+            "cover_audio": None,
+            "cfg_scale": None,
+            # auto: leave the duration blank so the job sizes it from the score
+            "max_duration": None if auto else float(song.get("target_seconds") or 300),
+            "format": "wav",
+            "plan_only": False,
+            "temperature": None,
+            "top_p": None,
+            "top_k": None,
+            "repetition_penalty": None,
+            "ode_steps": req.ode_steps,
+            "max_abc_tokens": req.max_abc_tokens,
+            "fast_decode": False,
+            "mp3": False,
+            "set_id": set_id,
+            "song_id": song["id"],
+        }
+        job = Job(id=uuid.uuid4().hex[:12], params=params, seed=seed)
+        STATE.put(job)
+        song.update(job_id=job.id, seed=seed, status="queued", audio=None, audio_seconds=None)
+        queued.append({"song_id": song["id"], "job_id": job.id, "order": song["order"]})
+    if queued:
+        # re-rendering changes the audio, so the joined files are stale
+        sets.clear_renders(set_id)
+        sets.save_set(data)
+    return {"queued": queued, "state": STATE.snapshot()}
+
+
+@app.post("/api/sets/{set_id}/concat")
+def api_set_concat(set_id: str, req: SetConcat):
+    data = _load_set_or_404(set_id)
+    try:
+        path = sets.concat_set(data, ffmpeg_path() or "", out_format=req.format, bitrate=req.bitrate)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, str(exc)) from exc
+    _, total = sets.timeline(data)
+    return {
+        "file": path.name,
+        "download": f"/api/sets/{set_id}/audio",
+        "bytes": path.stat().st_size,
+        "seconds": round(total, 1),
+    }
+
+
+@app.get("/api/sets/{set_id}/audio")
+def api_set_audio(set_id: str):
+    data = _load_set_or_404(set_id)
+    for name in ("set.mp3", "set.wav"):
+        path = sets.SETS_DIR / set_id / name
+        if path.is_file():
+            return FileResponse(path, filename=f"{(data.get('name') or 'set').strip()}{path.suffix}")
+    raise HTTPException(404, "no concatenated file yet")
+
+
+@app.get("/api/sets/{set_id}/export")
+def api_set_export(set_id: str, format: str = "youtube"):
+    data = _load_set_or_404(set_id)
+    if format == "json":
+        return Response(sets.export_json(data), media_type="application/json")
+    if format == "md":
+        return Response(sets.export_markdown(data), media_type="text/markdown; charset=utf-8")
+    if format == "youtube":
+        return Response(sets.export_youtube(data), media_type="text/plain; charset=utf-8")
+    raise HTTPException(422, "format must be json, md or youtube")
+
+
+@app.post("/api/sets/{set_id}/image")
+def api_set_image(set_id: str, image: UploadFile = File(...)):
+    _load_set_or_404(set_id)
+    try:
+        path = sets.save_background(set_id, image.filename or "", image.file)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"ok": True, "file": path.name, "bytes": path.stat().st_size}
+
+
+@app.post("/api/sets/{set_id}/video")
+def api_set_video(set_id: str, req: SetVideo):
+    data = _load_set_or_404(set_id)
+    ffmpeg = ffmpeg_path() or ""
+    image = sets.background_path(set_id)
+    if image is None:
+        raise HTTPException(422, "upload a background image first")
+    try:
+        if sets.concat_audio_path(set_id) is None:
+            sets.concat_set(data, ffmpeg, out_format="mp3", bitrate=req.bitrate)
+        path = sets.make_video(
+            data, ffmpeg, image, width=req.width, height=req.height, fps=req.fps, crf=req.crf
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, str(exc)) from exc
+    _, total = sets.timeline(data)
+    return {
+        "file": path.name,
+        "bytes": path.stat().st_size,
+        "seconds": round(total, 1),
+        "download": f"/api/sets/{set_id}/video-file",
+    }
+
+
+@app.get("/api/sets/{set_id}/video-file")
+def api_set_video_file(set_id: str, inline: bool = False):
+    data = _load_set_or_404(set_id)
+    path = sets.video_path(set_id)
+    if path is None:
+        raise HTTPException(404, "no video yet")
+    name = (data.get("name") or "set").strip() or "set"
+    if inline:
+        return FileResponse(path, media_type="video/mp4")
+    return FileResponse(path, media_type="video/mp4", filename=f"{name}.mp4")
 
 
 def main():
