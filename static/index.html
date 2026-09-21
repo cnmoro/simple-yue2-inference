@@ -352,7 +352,7 @@
       <label for="setBrief">Brief <span class="hint">— what the set is about; the LLM turns it into tracks</span></label>
       <textarea id="setBrief" placeholder="one hour of dreamy 1980s vaporwave for a night drive: warm analog synths, nostalgic nocturnal mood, 88 BPM..."></textarea>
       <div class="row3">
-        <div><label for="setMinutes">Target length (min) <span class="hint">guides the LLM</span></label><input type="number" id="setMinutes" value="60" min="1" max="600" step="1"></div>
+        <div><label for="setMinutes">Set length (min) <span class="hint">total for the whole set; the LLM splits it</span></label><input type="number" id="setMinutes" value="60" min="1" max="600" step="1"></div>
         <div><label for="setTrackCount">Tracks</label><input type="number" id="setTrackCount" value="12" min="1" max="40" step="1"></div>
         <div><label for="setLanguage">Lyrics language</label><input type="text" id="setLanguage" value="English"></div>
       </div>
@@ -1014,9 +1014,15 @@ function updateSetInfo() {
   const planned = songs.reduce((sum, s) => sum + Number(s.target_seconds || 0), 0);
   const busy = songs.some(isBusy);
   $("setInfo").textContent = `${songs.length} tracks · ${rendered.length} rendered`;
+  const auto = (setData.duration_mode || "auto") === "auto";
+  const overshoot = auto && planned > 0 && done > planned * 1.4
+    ? `<div class="live">auto sizing came out ${fmtDur(done)} against a ${fmtDur(planned)} estimate: `
+      + "each track follows its planned score (the planner writes full songs, not "
+      + "fragments of the set length). Use fixed mode to hold the set length.</div>"
+    : "";
   $("setSummary").innerHTML = songs.length
     ? `${songs.length} tracks &middot; estimated ${fmtDur(planned)} &middot; rendered `
-      + `${rendered.length}/${songs.length} (${fmtDur(done)})` + liveLine(songs)
+      + `${rendered.length}/${songs.length} (${fmtDur(done)})` + liveLine(songs) + overshoot
     : "No tracks yet. Fill step 1 and hit Draft with LLM.";
   $("setPublishInfo").textContent = rendered.length
     ? `${rendered.length}/${songs.length} rendered · ${fmtDur(done)} total`
@@ -1105,7 +1111,7 @@ function trackHtml(song) {
     <div class="tbody">
       ${player}
       <div class="row3">
-        <div><label>Estimate (s) <span class="hint">LLM guess, only used in fixed mode</span></label><input type="number" class="tsecs" min="15" max="900" step="1" value="${esc(song.target_seconds)}"></div>
+        <div><label>Estimate (s) <span class="hint">LLM's split of the set length, enforced only in fixed mode</span></label><input type="number" class="tsecs" min="15" max="900" step="1" value="${esc(song.target_seconds)}"></div>
         <div><label>Seed</label><input type="number" class="tseed" value="${song.seed == null ? "" : esc(song.seed)}"></div>
         <div><label>Job</label><input type="text" value="${esc(song.job_id || "")}" readonly></div>
       </div>
