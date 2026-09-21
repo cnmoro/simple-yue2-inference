@@ -61,6 +61,14 @@ python app.py            # http://127.0.0.1:7860
 The model loads lazily on the first generation. You can also hit **Preload
 model** in the UI, or start with `YUE2_PRELOAD=1 python app.py`.
 
+### Windows
+
+The app runs natively on Windows with the ROCm or CUDA wheels; `run.bat` starts
+it in a console window. To run it with **no window at all**, double-click
+`run_hidden.vbs`: it launches `.venv\Scripts\pythonw.exe` hidden and appends the
+server output to `logs/server.log`. `stop.cmd` kills whatever is listening on
+port 7860.
+
 ## Using it
 
 Fill in **Style / tags** and **Lyrics** (use `[Verse]` / `[Chorus]` markers),
@@ -252,4 +260,8 @@ setup_env.sh         generation env (torch 2.10 + yue2_infer + webUI)
 setup_sheetsage2.sh  transcription env (torch 2.8 + SheetSage2)
 download_models.sh   fetch weights into ./models
 requirements.txt     webUI-only deps (torch + yue2_infer come from setup_env.sh)
+run.bat              Windows launcher (console window)
+run_hidden.vbs       Windows launcher with no window; logs to logs/server.log
+serve.cmd            what run_hidden.vbs runs (pythonw + env vars)
+stop.cmd             stop whatever listens on port 7860
 ```
