@@ -117,6 +117,22 @@
   .toast.bad { border-color: var(--danger); color: #ffd9de; }
   #tabs { max-width: 1400px; margin: 0 auto; padding: 18px 22px 0; }
   #setsPanel { max-width: 1400px; margin: 0 auto; padding: 18px 22px 60px; }
+  /* config and publish on the left, the track list on the right */
+  .sets-grid { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 14px; align-items: start; }
+  #stepConfig { grid-column: 1; grid-row: 1; }
+  #stepPublish { grid-column: 1; grid-row: 2; }
+  #stepReview { grid-column: 2; grid-row: 1 / span 2; }
+  @media (max-width: 1100px) {
+    .sets-grid { grid-template-columns: 1fr; }
+    #stepConfig, #stepPublish, #stepReview { grid-column: 1; grid-row: auto; }
+  }
+  .stepcard.folded > *:not(.stephead) { display: none; }
+  .stephead { cursor: pointer; user-select: none; }
+  .stephead::after { content: "\25BE"; margin-left: auto; color: var(--muted); font-size: 10px; }
+  .stepcard.folded .stephead::after { content: "\25B8"; }
+  .steps .step { cursor: pointer; user-select: none; }
+  .steps .step.folded { opacity: .5; }
+  #setTracks { max-height: 66vh; overflow: auto; padding-right: 4px; }
   .steps { display: flex; gap: 8px; margin: 4px 0 18px; flex-wrap: wrap; }
   .steps .step { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 4px 12px; }
   .steps .step.on { color: #fff; border-color: var(--accent); background: rgba(124, 92, 255, .18); }
@@ -330,6 +346,7 @@
       <span class="note" id="setInfo"></span>
     </div>
 
+    <div class="sets-grid">
     <div class="stepcard" id="stepConfig">
       <div class="stephead"><span class="badge">1</span> Configure the set</div>
 
@@ -450,6 +467,7 @@
           <button class="ghost" id="setCopy">Copy</button>
         </div>
       </div>
+    </div>
     </div>
 
     <div class="error" id="setError"></div>
@@ -829,6 +847,23 @@ function toast(message, kind) {
   toastTimer = setTimeout(() => { box.className = "toast"; }, 7000);
 }
 
+const SET_CARDS = ["stepConfig", "stepReview", "stepPublish"];
+
+function foldStep(step, force) {
+  const card = $(SET_CARDS[step - 1]);
+  if (!card) return;
+  if (force === undefined) card.classList.toggle("folded");
+  else card.classList.toggle("folded", !!force);
+  syncStepChips();
+}
+
+function syncStepChips() {
+  document.querySelectorAll("#setSteps .step").forEach((chip) => {
+    const card = $(SET_CARDS[Number(chip.dataset.step) - 1]);
+    chip.classList.toggle("folded", !!card && card.classList.contains("folded"));
+  });
+}
+
 function initSets() {
   $("orKey").value = localStorage.getItem(OR_KEY) || "";
   $("orModelFilter").oninput = fillModels;
@@ -891,6 +926,13 @@ function initSets() {
   $("setBackground").oninput = () => queueSave();
   $("setTracks").addEventListener("input", onTrackInput);
   $("setTracks").addEventListener("click", onTrackClick);
+  document.querySelectorAll("#setSteps .step").forEach((chip) => {
+    chip.onclick = () => foldStep(Number(chip.dataset.step));
+  });
+  SET_CARDS.forEach((id, index) => {
+    const head = $(id).querySelector(".stephead");
+    if (head) head.onclick = () => foldStep(index + 1);
+  });
   // media errors do not bubble, so listen in the capture phase
   $("setTracks").addEventListener("error", (event) => {
     if (event.target && event.target.tagName === "AUDIO") {
@@ -1332,7 +1374,8 @@ function removeSong(song) {
   reorder();
   renderTracks();
   updateSetInfo();
-  queueSave();
+  if ((setData.songs || []).length) foldStep(1, true);
+  if ((setData.songs || []).some((s) => s.job && !["done", "error", "cancelled"].includes(s.job.status))) startSetPoll();
 }
 
 function downloadSong(song) {
@@ -1530,6 +1573,7 @@ async function draftSet(append) {
     renderTracks();
     updateSetInfo();
     refreshPicker();
+    foldStep(1, true);
     const first = document.querySelector("#setTracks .track");
     if (first) first.classList.add("open");
     $("stepReview").scrollIntoView({ behavior: "smooth", block: "start" });
