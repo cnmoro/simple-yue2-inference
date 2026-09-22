@@ -157,7 +157,8 @@
   .track.open { border-color: #3d4454; }
   .track .thead { display: flex; align-items: center; gap: 8px; cursor: pointer; }
   .track .torder { color: var(--muted); font-size: 12px; min-width: 20px; }
-  .track .ttitle { flex: 1; }
+  .track .ttitle { flex: 1 1 auto; min-width: 150px; }
+  .track .tdetail { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; margin-top: 5px; }
   .track .test { font-size: 11px; color: var(--muted); white-space: nowrap; }
   .track .tstatus { font-size: 11px; color: var(--muted); white-space: nowrap; }
   .track .tstatus.done { color: var(--accent2); }
@@ -425,6 +426,7 @@
       <div class="setbar" id="setSummary">No tracks yet.</div>
       <div class="actions">
         <button class="primary" id="setRender" disabled>Render all missing tracks</button>
+        <button class="ghost danger" id="setStopAll" style="display:none">Stop all</button>
         <button class="ghost" id="setTranslateAll">Translate all titles</button>
         <button class="ghost" id="setApplyAll">Apply translations to titles</button>
         <button class="ghost" id="setCollapse">Expand all</button>
@@ -894,6 +896,7 @@ function initSets() {
   $("setLanguage").oninput = () => queueSave();
   $("setDurationMode").onchange = () => queueSave();
   $("setCollapse").onclick = toggleAllCards;
+  $("setStopAll").onclick = () => stopJobs(null);
   $("setTranslateAll").onclick = () => translateTitles(null);
   $("setApplyAll").onclick = applyAllTranslations;
   $("setTranslationLang").oninput = () => {
@@ -1087,7 +1090,12 @@ async function makeVideo() {
   if (!setId) return;
   setError("");
   const [width, height] = ($("setVideoSize").value || "1920x1080").split("x").map(Number);
-  $("setVideo").disabled = true;
+  const button = $("setVideo");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Making video\u2026";
+  $("setDownloadVideo").style.display = "none";
+  const stopWatch = watchMedia("Making video", button);
   setStatus("rendering the video with ffmpeg — a one hour set takes a few minutes...");
   toast("rendering the video with ffmpeg\u2026");
   try {
@@ -1100,10 +1108,15 @@ async function makeVideo() {
     const fresh = await jfetch(`/api/sets/${setId}`);
     setData.video = fresh.video;
     updateMediaState();
-    setStatus(`${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`);
+    const done = `${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`;
+    setStatus(done);
+    toast(`video ready: ${done}`, "good");
   } catch (e) {
     setError(String(e.message));
     setStatus("");
+  } finally {
+    stopWatch();
+    button.textContent = label;
     updateMediaState();
   }
 }
@@ -1155,11 +1168,17 @@ function updateSteps(total, rendered, all, busy) {
   const button = $("setRender");
   button.disabled = total === 0 || rendered >= all || !!busy;
   button.textContent = busy ? "Rendering…" : "Render all missing tracks";
+  $("setStopAll").style.display = busy ? "" : "none";
 }
 
 function etaText(job) {
   if (!job || job.eta_total_seconds == null) return "";
   return "~" + fmtDur(job.eta_total_seconds) + (job.eta_calibrated ? " left" : " left (stage only)");
+}
+
+function shortStage(job) {
+  const stage = String(job.stage || job.status || "");
+  return stage.split(/[\s(]/)[0].toLowerCase() || "working";
 }
 
 function songStatus(song) {
@@ -1175,13 +1194,14 @@ function songStatus(song) {
     if (job.elapsed) bits.push(fmtDur(job.elapsed));
     const eta = etaText(job);
     if (eta) bits.push(eta);
-    return { cls: "", text: bits.join(" \u00b7 ") };
+    // the header keeps a short label; the numbers go on their own line
+    return { cls: "", text: shortStage(job), detail: bits.join(" \u00b7 ") };
   }
-  if (song.status === "error" || (job && job.status === "error")) return { cls: "error", text: "error" };
-  if (song.audio_seconds) return { cls: "done", text: fmtDur(song.audio_seconds) };
-  if (song.status === "cancelled") return { cls: "", text: "cancelled" };
-  if (song.status === "queued" || (job && job.status === "queued")) return { cls: "", text: "queued" };
-  return { cls: "", text: "not rendered" };
+  if (song.status === "error" || (job && job.status === "error")) return { cls: "error", text: "error", detail: "" };
+  if (song.audio_seconds) return { cls: "done", text: fmtDur(song.audio_seconds), detail: "" };
+  if (song.status === "cancelled") return { cls: "", text: "cancelled", detail: "" };
+  if (song.status === "queued" || (job && job.status === "queued")) return { cls: "", text: "queued", detail: "" };
+  return { cls: "", text: "not rendered", detail: "" };
 }
 
 function jobProgress(song) {
@@ -1218,12 +1238,14 @@ function trackHtml(song) {
       <span class="test">~${esc(song.target_seconds)}s</span>
       <span class="tstatus ${status.cls}">${esc(status.text)}</span>
       <button class="ghost" data-act="translate" title="${lang ? "Translate this title into " + esc(lang) : "Set the translation language in step 1 first"}" ${lang ? "" : "disabled"}>${esc(langCode)}</button>
+      <button class="ghost danger" data-act="stop" title="Cancel this render" style="display:none">Stop</button>
       <button class="ghost" data-act="up" title="Move up">&#8593;</button>
       <button class="ghost" data-act="down" title="Move down">&#8595;</button>
       <button class="ghost" data-act="gen" title="${hasAudio ? "Render this track again" : "Render this track"}">${renderLabel}</button>
       <button class="ghost" data-act="del" title="Remove this track">&#10005;</button>
     </div>
     ${composed}
+    <div class="tdetail" style="display:none"></div>
     <div class="lyricpeek">${esc(peek)}</div>
     <div class="tbar" style="display:none"><i></i></div>
     <div class="tbody">
@@ -1283,6 +1305,11 @@ function updateStatuses() {
     const el = card.querySelector(".tstatus");
     el.className = "tstatus " + status.cls;
     el.textContent = status.text;
+    const detail = card.querySelector(".tdetail");
+    if (detail) {
+      detail.textContent = status.detail || "";
+      detail.style.display = status.detail ? "" : "none";
+    }
 
     const busy = isBusy(song);
     card.querySelectorAll('button[data-act="gen"]').forEach((button) => {
@@ -1296,6 +1323,9 @@ function updateStatuses() {
     });
     card.querySelectorAll('button[data-act="del"]').forEach((button) => {
       button.disabled = busy;
+    });
+    card.querySelectorAll('button[data-act="stop"]').forEach((button) => {
+      button.style.display = busy ? "" : "none";
     });
 
     const bar = card.querySelector(".tbar");
@@ -1339,6 +1369,7 @@ function onTrackClick(event) {
     else if (act === "down") moveSong(song, 1);
     else if (act === "del") removeSong(song);
     else if (act === "gen") renderOne(song);
+    else if (act === "stop") stopJobs([song.id]);
     else if (act === "download") downloadSong(song);
     else if (act === "translate") translateTitles([song.id]);
     else if (act === "apply") applyTranslation(song);
@@ -1380,7 +1411,6 @@ function removeSong(song) {
   reorder();
   renderTracks();
   updateSetInfo();
-  if ((setData.songs || []).length) foldStep(1, true);
   if ((setData.songs || []).some((s) => s.job && !["done", "error", "cancelled"].includes(s.job.status))) startSetPoll();
 }
 
@@ -1579,7 +1609,6 @@ async function draftSet(append) {
     renderTracks();
     updateSetInfo();
     refreshPicker();
-    foldStep(1, true);
     const first = document.querySelector("#setTracks .track");
     if (first) first.classList.add("open");
     $("stepReview").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1645,6 +1674,26 @@ async function renderOne(song) {
   }
 }
 
+async function stopJobs(songIds) {
+  if (!setData) return;
+  const targets = (setData.songs || []).filter((song) => {
+    if (songIds && !songIds.includes(song.id)) return false;
+    return isBusy(song) && song.job_id;
+  });
+  if (!targets.length) {
+    toast("nothing is running");
+    return;
+  }
+  setError("");
+  // the cancel endpoint already exists for a single job, so no server change is needed
+  await Promise.all(targets.map((song) =>
+    fetch(`/api/job/${song.job_id}/cancel`, { method: "POST" }).catch(() => null)
+  ));
+  toast(`stopping ${targets.length} job(s)\u2026`);
+  await pollSetOnce();
+  startSetPoll();
+}
+
 function mergeJobs(fresh) {
   if (!setData) return;
   const byId = {};
@@ -1706,11 +1755,29 @@ function stopSetPoll() {
   }
 }
 
+// While an ffmpeg join runs, the request is still open, so poll the percent
+// the server reports and show it on the button and the status line.
+function watchMedia(label, button) {
+  const timer = setInterval(async () => {
+    try {
+      const fresh = await jfetch(`/api/sets/${setId}`);
+      const media = fresh.media;
+      if (!media || media.percent == null) return;
+      const percent = Math.round(media.percent);
+      button.textContent = `${label} ${percent}%`;
+      setStatus(`${media.kind === "concat" ? "joining the tracks" : "rendering the video"} `
+        + `with ffmpeg — ${percent}%`);
+    } catch (e) { /* keep waiting for the encode to finish */ }
+  }, 1500);
+  return () => clearInterval(timer);
+}
+
 async function concatSet() {
   setError("");
   if (!setId) return;
   $("setConcat").disabled = true;
   setStatus("concatenating with ffmpeg...");
+  const stopWatch = watchMedia("Concatenating", $("setConcat"));
   try {
     const out = await jfetch(`/api/sets/${setId}/concat`, {
       method: "POST",
@@ -1726,7 +1793,8 @@ async function concatSet() {
     setError(String(e.message));
     setStatus("");
   } finally {
-    $("setConcat").disabled = false;
+    stopWatch();
+    $("setConcat").textContent = "Concatenate audio";
     updateMediaState();
   }
 }

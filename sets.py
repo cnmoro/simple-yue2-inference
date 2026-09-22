@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +22,9 @@ ROOT = Path(__file__).resolve().parent
 SETS_DIR = Path(os.environ.get("YUE2_SETS", ROOT / "sets"))
 OUTPUTS = Path(os.environ.get("YUE2_OUTPUTS", ROOT / "outputs"))
 OPENROUTER_API = os.environ.get("YUE2_OPENROUTER_API", "https://openrouter.ai/api/v1")
+
+# Under pythonw there is no console, so ffmpeg/ffprobe would each open a window.
+NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 MIN_TRACK_SECONDS = 15
 MAX_TRACK_SECONDS = 900  # matches the webUI's max_duration ceiling
@@ -595,7 +599,7 @@ def missing_tracks(data: dict) -> list[int]:
     ]
 
 
-def concat_set(data: dict, ffmpeg: str, out_format: str = "mp3", bitrate: str = "320k") -> Path:
+def concat_set(data: dict, ffmpeg: str, out_format: str = "mp3", bitrate: str = "320k", on_progress=None) -> Path:
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found: install it, or set YUE2_FFMPEG to its full path")
     if not data.get("songs"):
@@ -619,18 +623,24 @@ def concat_set(data: dict, ffmpeg: str, out_format: str = "mp3", bitrate: str = 
     )
     suffix = "mp3" if out_format == "mp3" else "wav"
     output = folder / f"set.{suffix}"
+    # write beside the final name and swap it in, so the download never sees half a file
+    partial = folder / f"set.part.{suffix}"
+    partial.unlink(missing_ok=True)
+    total = sum(float(song.get("audio_seconds") or 0) for song in songs)
     codec = ["-c:a", "libmp3lame", "-b:a", bitrate] if suffix == "mp3" else ["-c:a", "pcm_s16le"]
-    proc = subprocess.run(
+    code, errors = _run_ffmpeg(
         [
-            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
             "-f", "concat", "-safe", "0", "-i", str(listing),
-            "-ar", "48000", "-ac", "2", *codec, str(output),
+            "-ar", "48000", "-ac", "2", *codec, str(partial),
         ],
-        capture_output=True,
-        text=True,
+        total,
+        on_progress,
     )
-    if proc.returncode != 0 or not output.is_file():
-        raise RuntimeError(f"ffmpeg concat failed: {(proc.stderr or '').strip()[-500:]}")
+    if code != 0 or not partial.is_file():
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg concat failed: {errors.strip()[-500:]}")
+    partial.replace(output)
     return output
 
 
@@ -710,6 +720,36 @@ def carry_rendered(old_songs, new_songs) -> None:
             song[key] = previous.get(key)
 
 
+def _run_ffmpeg(command, total_seconds, on_progress=None):
+    """Run ffmpeg, reporting percent from its -progress stream. Returns (code, stderr)."""
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=NO_CONSOLE,
+    )
+    captured = []
+
+    def drain():
+        captured.append(proc.stderr.read())
+
+    thread = threading.Thread(target=drain, daemon=True)
+    thread.start()
+    for line in proc.stdout:
+        if not on_progress or total_seconds <= 0 or not line.startswith("out_time_ms="):
+            continue
+        try:
+            seconds = int(line.split("=", 1)[1]) / 1_000_000
+        except ValueError:
+            continue
+        # leave the last percent for the caller, which knows the encode finished
+        on_progress(min(99.0, 100.0 * seconds / total_seconds))
+    proc.wait()
+    thread.join(timeout=10)
+    return proc.returncode, "".join(captured)
+
+
 def _probe_duration(ffmpeg: str, path: Path) -> float | None:
     probe = Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
     executable = str(probe) if probe.is_file() else "ffprobe"
@@ -717,7 +757,7 @@ def _probe_duration(ffmpeg: str, path: Path) -> float | None:
         result = subprocess.run(
             [executable, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, creationflags=NO_CONSOLE,
         )
         return float(result.stdout.strip())
     except Exception:  # noqa: BLE001
@@ -733,6 +773,7 @@ def make_video(
     height: int = 1080,
     fps: int = 2,
     crf: int = 23,
+    on_progress=None,
 ) -> Path:
     """Still image + concatenated audio -> one upload-ready mp4."""
     if not ffmpeg:
@@ -743,12 +784,14 @@ def make_video(
     if not image.is_file():
         raise RuntimeError("background image not found")
     output = folder(str(data["id"])) / "set.mp4"
+    partial = folder(str(data["id"])) / "set.part.mp4"
+    partial.unlink(missing_ok=True)
     scale = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p"
     )
     command = [
-        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
         "-loop", "1", "-framerate", str(fps), "-i", str(image),
         "-i", str(audio),
         "-vf", scale, "-r", str(fps),
@@ -759,8 +802,10 @@ def make_video(
     duration = _probe_duration(ffmpeg, audio)
     if duration:
         command += ["-t", f"{duration:.3f}"]
-    command += ["-movflags", "+faststart", str(output)]
-    proc = subprocess.run(command, capture_output=True, text=True)
-    if proc.returncode != 0 or not output.is_file():
-        raise RuntimeError(f"ffmpeg video failed: {(proc.stderr or '').strip()[-500:]}")
+    command += ["-movflags", "+faststart", str(partial)]
+    code, errors = _run_ffmpeg(command, duration or 0.0, on_progress)
+    if code != 0 or not partial.is_file():
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg video failed: {errors.strip()[-500:]}")
+    partial.replace(output)
     return output

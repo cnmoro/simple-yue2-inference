@@ -348,6 +348,10 @@ class State:
 
 
 STATE = State()
+# ffmpeg joins run one at a time; a second request should say so instead of racing
+MEDIA_LOCK = threading.Lock()
+# percent of the running join/video encode, for the UI to poll
+MEDIA_STATE: dict = {"kind": None, "percent": None}
 
 
 def default_backend() -> str:
@@ -408,6 +412,7 @@ def encode_mp3(source: Path, destination: Path) -> Path:
         ],
         capture_output=True,
         text=True,
+        creationflags=sets.NO_CONSOLE,
     )
     if proc.returncode != 0 or not destination.exists():
         tail = (proc.stderr or proc.stdout or "").strip()[-500:]
@@ -436,7 +441,7 @@ def transcribe_cover(audio_path: str, job: Job) -> str:
         "--base-model",
         str(MERT_DIR),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, creationflags=sets.NO_CONSOLE)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-1500:]
         raise RuntimeError(f"SheetSage2 transcription failed: {tail}")
@@ -918,6 +923,7 @@ def _enrich(set_id: str, data: dict) -> dict:
         if video
         else None
     )
+    data["media"] = dict(MEDIA_STATE) if MEDIA_STATE["kind"] else None
     return data
 
 
@@ -1055,10 +1061,22 @@ def api_set_render(set_id: str, req: SetRender):
 @app.post("/api/sets/{set_id}/concat")
 def api_set_concat(set_id: str, req: SetConcat):
     data = _load_set_or_404(set_id)
+    if not MEDIA_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "another join or video is still running")
+    MEDIA_STATE.update(kind="concat", percent=0.0)
     try:
-        path = sets.concat_set(data, ffmpeg_path() or "", out_format=req.format, bitrate=req.bitrate)
+        path = sets.concat_set(
+            data,
+            ffmpeg_path() or "",
+            out_format=req.format,
+            bitrate=req.bitrate,
+            on_progress=lambda percent: MEDIA_STATE.update(percent=percent),
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(422, str(exc)) from exc
+    finally:
+        MEDIA_STATE.update(kind=None, percent=None)
+        MEDIA_LOCK.release()
     _, total = sets.timeline(data)
     return {
         "file": path.name,
@@ -1107,14 +1125,25 @@ def api_set_video(set_id: str, req: SetVideo):
     image = sets.background_path(set_id)
     if image is None:
         raise HTTPException(422, "upload a background image first")
+    if not MEDIA_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "another join or video is still running")
     try:
         if sets.concat_audio_path(set_id) is None:
-            sets.concat_set(data, ffmpeg, out_format="mp3", bitrate=req.bitrate)
+            MEDIA_STATE.update(kind="concat", percent=0.0)
+            sets.concat_set(
+                data, ffmpeg, out_format="mp3", bitrate=req.bitrate,
+                on_progress=lambda percent: MEDIA_STATE.update(percent=percent),
+            )
+        MEDIA_STATE.update(kind="video", percent=0.0)
         path = sets.make_video(
-            data, ffmpeg, image, width=req.width, height=req.height, fps=req.fps, crf=req.crf
+            data, ffmpeg, image, width=req.width, height=req.height, fps=req.fps, crf=req.crf,
+            on_progress=lambda percent: MEDIA_STATE.update(percent=percent),
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(422, str(exc)) from exc
+    finally:
+        MEDIA_STATE.update(kind=None, percent=None)
+        MEDIA_LOCK.release()
     _, total = sets.timeline(data)
     return {
         "file": path.name,
