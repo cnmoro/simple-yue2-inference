@@ -43,6 +43,7 @@
   textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, monospace; }
   #lyrics { min-height: 220px; }
   #abc { min-height: 120px; }
+  #setBackground { min-height: 180px; }
   input[type=file] { width: 100%; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; }
   input[type=file]::file-selector-button { margin-right: 10px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -59,7 +60,7 @@
   button.primary:hover:not(:disabled) { background: #8f74ff; }
   button.ghost { background: transparent; }
   button.danger { border-color: #4a2b32; color: var(--danger); }
-  .actions { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 20px; flex-wrap: wrap; }
   .actions .spacer { flex: 1; }
   .seg { display: inline-flex; background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 3px; margin-bottom: 18px; }
   .seg button { border: none; background: transparent; border-radius: 6px; padding: 7px 14px; color: var(--muted); }
@@ -118,13 +119,21 @@
   #tabs { max-width: 1400px; margin: 0 auto; padding: 18px 22px 0; }
   #setsPanel { max-width: 1400px; margin: 0 auto; padding: 18px 22px 60px; }
   /* config and publish on the left, the track list on the right */
-  .sets-grid { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 14px; align-items: start; }
-  #stepConfig { grid-column: 1; grid-row: 1; }
-  #stepPublish { grid-column: 1; grid-row: 2; }
-  #stepReview { grid-column: 2; grid-row: 1 / span 2; }
+  .sets-grid { display: grid; grid-template-columns: minmax(320px, 520px) minmax(0, 1fr); gap: 14px; }
+  /* let the field groups reflow instead of squeezing labels into three skinny columns */
+  .sets-grid .row, .sets-grid .row3 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  #stepConfig { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
+  #stepConfig #setBrief { flex: 1 1 auto; min-height: 90px; }
+  /* step 3 absorbs the leftover height so no gap opens between it and step 1 */
+  #stepPublish { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; }
+  #stepPublish #setOutWrap { flex: 1 1 auto; display: flex; flex-direction: column; }
+  #stepPublish #setOut { flex: 1 1 auto; min-height: 120px; }
+  /* step 2 spans both left cards and stretches to their combined height */
+  #stepReview { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; }
   @media (max-width: 1100px) {
     .sets-grid { grid-template-columns: 1fr; }
-    #stepConfig, #stepPublish, #stepReview { grid-column: 1; grid-row: auto; }
+    #stepConfig, #stepPublish, #stepReview { grid-column: 1; grid-row: auto; align-self: auto; }
+    #stepReview { display: block; }
   }
   .stepcard.folded > *:not(.stephead) { display: none; }
   .stephead { cursor: pointer; user-select: none; }
@@ -132,7 +141,8 @@
   .stepcard.folded .stephead::after { content: "\25B8"; }
   .steps .step { cursor: pointer; user-select: none; }
   .steps .step.folded { opacity: .5; }
-  #setTracks { max-height: 66vh; overflow: auto; padding-right: 4px; }
+  #setTracks { flex: 1 1 auto; min-height: 160px; overflow: auto; padding-right: 4px; }
+  @media (max-width: 1100px) { #setTracks { flex: none; max-height: 60vh; } }
   .steps { display: flex; gap: 8px; margin: 4px 0 18px; flex-wrap: wrap; }
   .steps .step { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 4px 12px; }
   .steps .step.on { color: #fff; border-color: var(--accent); background: rgba(124, 92, 255, .18); }
@@ -374,7 +384,7 @@
       <label for="setBrief">Brief <span class="hint">— what the set is about; the LLM turns it into tracks</span></label>
       <textarea id="setBrief" placeholder="one hour of dreamy 1980s vaporwave for a night drive: warm analog synths, nostalgic nocturnal mood, 88 BPM..."></textarea>
       <div class="row3">
-        <div><label for="setMinutes">Set length (min) <span class="hint">total for the whole set; the LLM splits it</span></label><input type="number" id="setMinutes" value="60" min="1" max="600" step="1"></div>
+        <div><label for="setMinutes">Set length (min) <span class="hint">whole set; the LLM splits it</span></label><input type="number" id="setMinutes" value="60" min="1" max="600" step="1"></div>
         <div><label for="setTrackCount">Tracks</label><input type="number" id="setTrackCount" value="12" min="1" max="40" step="1"></div>
         <div><label for="setLanguage">Lyrics language</label><input type="text" id="setLanguage" value="English"></div>
       </div>
@@ -387,7 +397,7 @@
           </select>
         </div>
         <div>
-          <label for="setTranslationLang">Title translation <span class="hint">language for the Original (Translation) output</span></label>
+          <label for="setTranslationLang">Title translation <span class="hint">language for Original (Translation)</span></label>
           <input type="text" id="setTranslationLang" list="languageList" placeholder="Portuguese">
           <datalist id="languageList">
             <option value="Portuguese"></option>
@@ -453,18 +463,18 @@
       <div class="actions">
         <button class="primary" id="setConcat">Concatenate audio</button>
         <button class="primary" id="setVideo" disabled>Make video (image + audio)</button>
-        <button class="ghost" id="setExportYt">Export for YouTube</button>
-        <button class="ghost" id="setExportMd">Export Markdown</button>
-        <button class="ghost" id="setDownloadJson">Download JSON</button>
+      </div>
+      <div class="actions">
         <button class="ghost" id="setDownload" style="display:none">Download audio</button>
         <button class="ghost" id="setDownloadVideo" style="display:none">Download video</button>
       </div>
 
-      <div id="setOutWrap" style="display:none">
-        <label for="setOut">Export</label>
+      <div id="setOutWrap">
+        <label for="setOut">YouTube description <span class="hint">title, chapter timestamps and the background prompt — it keeps itself up to date</span></label>
         <textarea id="setOut" spellcheck="false"></textarea>
         <div class="actions">
-          <button class="ghost" id="setCopy">Copy</button>
+          <button class="primary" id="setCopy">Copy description</button>
+          <button class="ghost" id="setExportMd">Download .md</button>
         </div>
       </div>
     </div>
@@ -908,13 +918,8 @@ function initSets() {
   $("setDraftAppend").onclick = () => draftSet(true);
   $("setRender").onclick = renderSet;
   $("setConcat").onclick = concatSet;
-  $("setExportYt").onclick = () => exportSet("youtube");
-  $("setExportMd").onclick = () => exportSet("md");
-  $("setDownloadJson").onclick = downloadJson;
-  $("setCopy").onclick = () => {
-    navigator.clipboard.writeText($("setOut").value);
-    setStatus("copied");
-  };
+  $("setCopy").onclick = copyDescription;
+  $("setExportMd").onclick = downloadMarkdown;
   $("setDownload").onclick = () => window.open(`/api/sets/${setId}/audio`, "_blank");
   $("setDownloadVideo").onclick = () => window.open(`/api/sets/${setId}/video-file`, "_blank");
   $("setImage").onchange = uploadImage;
@@ -1251,6 +1256,7 @@ function renderTracks() {
   }
   $("setTracks").innerHTML = setData.songs.map(trackHtml).join("");
   lastAudioSig = audioSignature();
+  refreshExport();
 }
 
 function audioSignature() {
@@ -1444,8 +1450,8 @@ async function deleteSet() {
     await jfetch(`/api/sets/${setId}`, { method: "DELETE" });
     setId = null;
     setData = null;
-    $("setOutWrap").style.display = "none";
     $("setDownload").style.display = "none";
+    $("setOut").value = "";
     await loadSets();
     setStatus("deleted");
   } catch (e) {
@@ -1660,8 +1666,11 @@ async function pollSetOnce() {
   try {
     const fresh = await jfetch(`/api/sets/${setId}`);
     mergeJobs(fresh);
-    // a track that just finished needs its player and download button
-    if (audioSignature() !== lastAudioSig) renderTracksPreserving();
+    // a track that just finished needs its player, its download button and its chapter
+    if (audioSignature() !== lastAudioSig) {
+      renderTracksPreserving();
+      refreshExport();
+    }
     updateStatuses();
     updateSetInfo();
     const active = (fresh.songs || []).find(isBusy);
@@ -1722,31 +1731,38 @@ async function concatSet() {
   }
 }
 
-async function exportSet(format) {
-  setError("");
+async function refreshExport() {
   if (!setId) return;
   try {
-    const response = await fetch(`/api/sets/${setId}/export?format=${format}`);
-    if (!response.ok) throw new Error(response.statusText);
-    $("setOutWrap").style.display = "";
-    $("setOut").value = await response.text();
-    setStatus(format === "youtube" ? "YouTube description ready" : "markdown ready");
+    const response = await fetch(`/api/sets/${setId}/export?format=youtube`);
+    if (!response.ok) return;
+    const text = await response.text();
+    const box = $("setOut");
+    if (box.value !== text) box.value = text;
+  } catch (e) { /* the field simply keeps its previous text */ }
+}
+
+async function copyDescription() {
+  try {
+    await navigator.clipboard.writeText($("setOut").value);
+    toast("YouTube description copied", "good");
   } catch (e) {
-    setError(String(e.message));
+    setError("could not copy to the clipboard: " + e);
   }
 }
 
-async function downloadJson() {
+async function downloadMarkdown() {
   if (!setId) return;
   try {
-    const response = await fetch(`/api/sets/${setId}/export?format=json`);
-    const text = await response.text();
-    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const response = await fetch(`/api/sets/${setId}/export?format=md`);
+    if (!response.ok) throw new Error(response.statusText);
+    const url = URL.createObjectURL(new Blob([await response.text()], { type: "text/markdown" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${String(setData.name || "set").replace(/[^\w\-]+/g, "_")}.json`;
+    link.download = `${String((setData && setData.name) || "set").replace(/[^\w\-]+/g, "_")}.md`;
     link.click();
     URL.revokeObjectURL(url);
+    toast("markdown downloaded", "good");
   } catch (e) {
     setError(String(e.message));
   }
