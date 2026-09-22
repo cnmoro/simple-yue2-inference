@@ -809,6 +809,8 @@ let setSaveTimer = null;
 let setPollTimer = null;
 let setsOpened = false;
 let lastAudioSig = "";
+// true while an ffmpeg join is running, so nothing re-enables those buttons
+let mediaBusy = false;
 
 const esc = (value) => String(value == null ? "" : value)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -1048,12 +1050,14 @@ function updateMediaState() {
   // joining only makes sense once every track has audio
   const canConcat = songs.length > 0 && rendered === songs.length;
   const concatButton = $("setConcat");
-  concatButton.disabled = !canConcat;
-  concatButton.title = canConcat ? "" : `${songs.length - rendered} track(s) still without audio`;
+  concatButton.disabled = mediaBusy || !canConcat;
+  concatButton.title = mediaBusy
+    ? "an ffmpeg encode is already running"
+    : (canConcat ? "" : `${songs.length - rendered} track(s) still without audio`);
   $("setImageInfo").textContent = image
     ? `image: ${image.file} · ${(image.bytes / 1048576).toFixed(1)} MB`
     : "no image yet — generate one from the prompt above, then upload it here";
-  $("setVideo").disabled = !(image && canConcat);
+  $("setVideo").disabled = mediaBusy || !(image && canConcat);
   const audioButton = $("setDownload");
   audioButton.style.display = concat ? "" : "none";
   if (concat) audioButton.textContent = `Download audio (${(concat.bytes / 1048576).toFixed(1)} MB)`;
@@ -1092,6 +1096,7 @@ async function makeVideo() {
   const [width, height] = ($("setVideoSize").value || "1920x1080").split("x").map(Number);
   const button = $("setVideo");
   const label = button.textContent;
+  mediaBusy = true;
   button.disabled = true;
   button.textContent = "Making video\u2026";
   $("setDownloadVideo").style.display = "none";
@@ -1116,6 +1121,7 @@ async function makeVideo() {
     setStatus("");
   } finally {
     stopWatch();
+    mediaBusy = false;
     button.textContent = label;
     updateMediaState();
   }
@@ -1776,6 +1782,7 @@ async function concatSet() {
   setError("");
   if (!setId) return;
   $("setConcat").disabled = true;
+  mediaBusy = true;
   setStatus("concatenating with ffmpeg...");
   const stopWatch = watchMedia("Concatenating", $("setConcat"));
   try {
@@ -1794,6 +1801,7 @@ async function concatSet() {
     setStatus("");
   } finally {
     stopWatch();
+    mediaBusy = false;
     $("setConcat").textContent = "Concatenate audio";
     updateMediaState();
   }
