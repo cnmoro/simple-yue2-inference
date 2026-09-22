@@ -352,6 +352,8 @@ STATE = State()
 MEDIA_LOCK = threading.Lock()
 # percent of the running join/video encode, for the UI to poll
 MEDIA_STATE: dict = {"kind": None, "percent": None}
+# on-demand track conversions are independent of the set joins
+CONVERT_LOCK = threading.Lock()
 
 
 def default_backend() -> str:
@@ -795,12 +797,17 @@ def api_cancel(job_id: str):
 
 
 @app.get("/api/job/{job_id}/audio")
-def api_audio(job_id: str, inline: bool = False):
+def api_audio(job_id: str, inline: bool = False, format: str | None = None):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", job_id):
         raise HTTPException(422, "bad job id")
     path = sets.resolve_audio_file(job_id)
     if path is None:
         raise HTTPException(404, "no audio for this job")
+    if format:
+        if format not in ("wav", "flac", "mp3"):
+            raise HTTPException(422, "format must be wav, flac or mp3")
+        if path.suffix.lstrip(".").lower() != format:
+            path = _converted_track(job_id, path, format)
     if inline:
         # No filename: omit Content-Disposition so the browser plays it in place.
         return FileResponse(path)
@@ -906,6 +913,21 @@ def _enrich(set_id: str, data: dict) -> dict:
     for song in data.get("songs") or []:
         job = STATE.jobs.get(str(song.get("job_id") or ""))
         song["job"] = job.public() if job is not None else None
+        song["needs_rerender"] = False
+        if song.get("audio_seconds") and song.get("job_id"):
+            params = job.params if job is not None else None
+            if params is None and re.fullmatch(r"[A-Za-z0-9_-]{1,40}", str(song["job_id"])):
+                meta = sets.OUTPUTS / str(song["job_id"]) / "meta.json"
+                if meta.is_file():
+                    try:
+                        params = json.loads(meta.read_text(encoding="utf-8")).get("params")
+                    except (OSError, ValueError):
+                        pass
+            if isinstance(params, dict) and "style" in params and "lyrics" in params:
+                song["needs_rerender"] = (
+                    (song.get("style") or "instrumental") != params["style"]
+                    or (song.get("lyrics") or "") != params["lyrics"]
+                )
     for name in ("set.mp3", "set.wav"):
         path = sets.SETS_DIR / set_id / name
         if path.is_file():
@@ -934,9 +956,26 @@ def api_set_get(set_id: str):
 
 @app.put("/api/sets/{set_id}")
 def api_set_save(set_id: str, data: dict):
-    _load_set_or_404(set_id)
+    previous = _load_set_or_404(set_id)
     data["id"] = set_id
-    return _enrich(set_id, sets.save_set(data))
+    incoming = sets.normalize(data)
+    current_by_id = {song["id"]: song for song in previous["songs"]}
+    for song in incoming["songs"]:
+        current = current_by_id.get(song["id"])
+        if current:
+            for field in ("job_id", "status", "audio", "audio_seconds"):
+                song[field] = current.get(field)
+    changed_audio = sets.audio_signature(previous["songs"]) != sets.audio_signature(incoming["songs"])
+    if changed_audio and not MEDIA_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "wait for the current join or video to finish before changing tracks")
+    try:
+        saved = sets.save_set(incoming)
+        if changed_audio:
+            sets.clear_renders(set_id)
+    finally:
+        if changed_audio:
+            MEDIA_LOCK.release()
+    return _enrich(set_id, saved)
 
 
 @app.delete("/api/sets/{set_id}")
@@ -969,7 +1008,7 @@ def api_set_draft(set_id: str, req: SetDraft):
             f"could not use the model reply ({exc}). Try a model with a larger output limit, "
             "or ask for fewer tracks.",
         ) from exc
-    old_signature = sets.tracklist_signature(existing)
+    old_signature = sets.audio_signature(existing)
     if req.append:
         songs = sets.merge_tracks(existing, songs)
     else:
@@ -982,7 +1021,7 @@ def api_set_draft(set_id: str, req: SetDraft):
     data["lyrics_language"] = req.language
     data["track_count"] = req.track_count
     data["model"] = req.model
-    if sets.tracklist_signature(songs) != old_signature:
+    if sets.audio_signature(songs) != old_signature:
         # the derived audio/video belong to the previous tracklist
         sets.clear_renders(set_id)
     return _enrich(set_id, sets.save_set(data))
@@ -1096,6 +1135,24 @@ def api_set_audio(set_id: str):
     raise HTTPException(404, "no concatenated file yet")
 
 
+def _converted_track(job_id: str, source: Path, fmt: str) -> Path:
+    """Convert a rendered track on demand, caching the result next to it."""
+    target = source.with_suffix("." + fmt)
+    if target.is_file():
+        return target
+    if not CONVERT_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "another conversion is running, try again in a moment")
+    try:
+        if not target.is_file():
+            if fmt == "mp3":
+                encode_mp3(source, target)
+            else:
+                raise HTTPException(422, f"cannot convert to {fmt} on demand")
+    finally:
+        CONVERT_LOCK.release()
+    return target
+
+
 @app.get("/api/sets/{set_id}/export")
 def api_set_export(set_id: str, format: str = "youtube"):
     data = _load_set_or_404(set_id)
@@ -1111,10 +1168,14 @@ def api_set_export(set_id: str, format: str = "youtube"):
 @app.post("/api/sets/{set_id}/image")
 def api_set_image(set_id: str, image: UploadFile = File(...)):
     _load_set_or_404(set_id)
+    if not MEDIA_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "another join or video is still running")
     try:
         path = sets.save_background(set_id, image.filename or "", image.file)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    finally:
+        MEDIA_LOCK.release()
     return {"ok": True, "file": path.name, "bytes": path.stat().st_size}
 
 

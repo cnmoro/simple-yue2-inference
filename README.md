@@ -155,12 +155,15 @@ to disk. The model list is proxied from `/api/v1/models`.
   60-900 s, and duplicate titles are suffixed.
 - **Add tracks** appends instead of replacing. The prompt lists the existing
   titles and styles so the new songs continue the set, and rendered audio is
-  kept for tracks whose title did not change.
+  kept only when a track keeps the same title, style and lyrics.
 
 **2. Review and edit.** A summary line, then one row per track: title, estimate,
 live status and the first lyric line. Clicking a row opens its editor (style,
 lyrics, seed, estimate). **Render all missing tracks** queues everything onto the
 same single worker, in order; each row shows the live stage, token count and ETA.
+The review panel flags empty tracks, failed jobs, audio that is more than 20%
+shorter than its estimate, and style or lyrics edited after rendering. The queue
+shows an approximate remaining time after the first track finishes.
 Track duration follows **Track duration**: `auto` (default) leaves the cap blank
 so each track is sized from its own score and lyrics, `fixed` uses the per-track
 estimate as a cap.
@@ -182,7 +185,9 @@ output shows `Original (Translation)` — the chapter list, both text exports an
 the tracklist — while the original title stays editable and re-translatable.
 
 The joined files are derived from the current tracklist: they are deleted when a
-draft changes the tracklist or when a track is queued for re-rendering.
+draft changes the audio selection or order, when a track is removed or reordered,
+or when a track is queued for re-rendering. Uploading a new background removes
+the old video while preserving the joined audio.
 
 `sets/` is gitignored, like `outputs/`: it is your content, not the app's.
 

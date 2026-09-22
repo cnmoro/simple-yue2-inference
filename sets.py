@@ -656,14 +656,20 @@ def save_background(set_id: str, filename: str, handle) -> Path:
         raise ValueError(f"unsupported image type {suffix or '(none)'}; use png, jpg or webp")
     target = folder(set_id)
     target.mkdir(parents=True, exist_ok=True)
-    for old in target.glob("background.*"):
-        old.unlink(missing_ok=True)
     path = target / f"background{suffix}"
-    with path.open("wb") as out:
-        shutil.copyfileobj(handle, out)
-    if path.stat().st_size == 0:
-        path.unlink(missing_ok=True)
-        raise ValueError("the uploaded image is empty")
+    temporary = target / f".background-{uuid.uuid4().hex}{suffix}.tmp"
+    try:
+        with temporary.open("wb") as out:
+            shutil.copyfileobj(handle, out)
+        if temporary.stat().st_size == 0:
+            raise ValueError("the uploaded image is empty")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    for old in target.glob("background.*"):
+        if old != path:
+            old.unlink(missing_ok=True)
+    (target / "set.mp4").unlink(missing_ok=True)
     return path
 
 
@@ -699,22 +705,26 @@ def clear_renders(set_id: str) -> list[str]:
     return removed
 
 
-def tracklist_signature(songs) -> tuple:
+def audio_signature(songs) -> tuple:
+    """Inputs that determine the order and identity of a joined audio file."""
     return tuple(
-        (int(s.get("order") or 0), str(s.get("title") or ""), str(s.get("job_id") or ""))
+        (str(s.get("id") or ""), str(s.get("job_id") or ""), s.get("audio_seconds"))
         for s in sorted(songs or [], key=lambda s: int(s.get("order") or 0))
     )
 
 
 def carry_rendered(old_songs, new_songs) -> None:
-    """A re-draft keeps the audio of tracks whose title did not change."""
+    """A re-draft keeps audio only when the generated inputs still match."""
     by_title = {}
     for song in old_songs or []:
         if song.get("audio_seconds") and song.get("job_id"):
             by_title[str(song.get("title") or "").strip().lower()] = song
     for song in new_songs:
         previous = by_title.get(str(song.get("title") or "").strip().lower())
-        if not previous:
+        if not previous or any(
+            str(song.get(key) or "").strip() != str(previous.get(key) or "").strip()
+            for key in ("style", "lyrics")
+        ):
             continue
         for key in ("job_id", "audio", "audio_seconds", "seed", "status"):
             song[key] = previous.get(key)

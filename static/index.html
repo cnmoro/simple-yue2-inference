@@ -153,6 +153,8 @@
   .stephead .badge { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; }
   .setbar { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .setbar .live { color: var(--text); margin-top: 6px; font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .set-checks { display: none; margin: 8px 0 12px; padding: 9px 11px; border: 1px solid #4a3f22; border-radius: 8px; color: var(--warn); font-size: 12px; white-space: pre-line; }
+  .set-checks.on { display: block; }
   .track { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; background: var(--panel); }
   .track.open { border-color: #3d4454; }
   .track .thead { display: flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -163,6 +165,8 @@
   .track .tstatus { font-size: 11px; color: var(--muted); white-space: nowrap; }
   .track .tstatus.done { color: var(--accent2); }
   .track .tstatus.error { color: var(--danger); }
+  .track .tstatus.warn { color: var(--warn); }
+  .track.attention { border-color: #4a3f22; }
   .track .lyricpeek { font-size: 11px; color: #6f7787; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .track .tsub { font-size: 11px; color: var(--accent2); margin-top: 5px; }
   .track .tbar { height: 3px; background: var(--panel2); border-radius: 2px; margin-top: 6px; overflow: hidden; }
@@ -417,13 +421,14 @@
       <div class="actions">
         <button class="primary" id="setDraft">Draft with LLM</button>
         <button class="ghost" id="setDraftAppend">Add tracks</button>
-        <span class="note">Draft replaces the whole tracklist. Add tracks keeps what you have and continues the set (rendered audio is preserved for tracks with the same title).</span>
+        <span class="note">Draft replaces the whole tracklist. Add tracks keeps what you have. A new draft preserves audio only when a track keeps the same title, style and lyrics.</span>
       </div>
     </div>
 
     <div class="stepcard dim" id="stepReview">
       <div class="stephead"><span class="badge">2</span> Review and edit the draft</div>
       <div class="setbar" id="setSummary">No tracks yet.</div>
+      <div class="set-checks" id="setReviewChecks" role="status"></div>
       <div class="actions">
         <button class="primary" id="setRender" disabled>Render all missing tracks</button>
         <button class="ghost danger" id="setStopAll" style="display:none">Stop all</button>
@@ -438,6 +443,7 @@
     <div class="stepcard dim" id="stepPublish">
       <div class="stephead"><span class="badge">3</span> Join, illustrate and publish</div>
       <div class="setbar" id="setPublishInfo">Nothing rendered yet.</div>
+      <div class="set-checks" id="setPublishChecks" role="status"></div>
 
       <label for="setBackground">Background image prompt <span class="hint">one image for the whole set</span></label>
       <textarea id="setBackground" placeholder="a single 16:9 still that sits behind the whole set..."></textarea>
@@ -483,7 +489,7 @@
     </div>
 
     <div class="error" id="setError"></div>
-    <div class="note" id="setStatus"></div>
+    <div class="note" id="setStatus" role="status"></div>
   </div>
 </section>
 
@@ -549,8 +555,10 @@ function setProgress(stage, meta, indeterminate, pct) {
 
 function fmtDur(s, precise) {
   if (s == null || !isFinite(s)) return "";
-  if (s < 60) return (precise ? Number(s).toFixed(1) : String(Math.round(s))) + "s";
-  return Math.floor(s / 60) + "m " + String(Math.round(s % 60)).padStart(2, "0") + "s";
+  if (precise && s < 60) return Number(s).toFixed(1) + "s";
+  const rounded = Math.round(s);
+  if (rounded < 60) return rounded + "s";
+  return Math.floor(rounded / 60) + "m " + String(rounded % 60).padStart(2, "0") + "s";
 }
 
 function renderLog(events) {
@@ -807,6 +815,7 @@ let setId = null;
 let orModels = [];
 let setSaveTimer = null;
 let setPollTimer = null;
+let setPollInFlight = false;
 let setsOpened = false;
 let lastAudioSig = "";
 // true while an ffmpeg join is running, so nothing re-enables those buttons
@@ -1066,6 +1075,17 @@ function updateMediaState() {
   if (video) videoButton.textContent = `Download video (${(video.bytes / 1048576).toFixed(1)} MB)`;
 }
 
+async function refreshSetMedia() {
+  if (!setId || !setData) return;
+  try {
+    const fresh = await jfetch(`/api/sets/${setId}`);
+    setData.video = fresh.video;
+    setData.concat = fresh.concat;
+    setData.image = fresh.image;
+  } catch (e) { /* keep what we have */ }
+  updateMediaState();
+}
+
 async function uploadImage() {
   const input = $("setImage");
   if (!input.files || !input.files[0] || !setId) return;
@@ -1083,6 +1103,7 @@ async function uploadImage() {
     setData.image = fresh.image;
     setData.video = fresh.video;
     updateMediaState();
+    updateSetInfo();
     setStatus("image uploaded — now make the video");
   } catch (e) {
     setError(String(e.message));
@@ -1110,12 +1131,12 @@ async function makeVideo() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ width: width, height: height, fps: 2 }),
     });
-    const fresh = await jfetch(`/api/sets/${setId}`);
-    setData.video = fresh.video;
+    setData.video = { file: out.file, bytes: out.bytes, download: out.download };
     updateMediaState();
+    updateSetInfo();
     const done = `${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`;
     setStatus(done);
-    toast(`video ready: ${done}`, "good");
+    toast(`video ready: ${done} — Download video is available below`, "good");
   } catch (e) {
     setError(String(e.message));
     setStatus("");
@@ -1123,7 +1144,7 @@ async function makeVideo() {
     stopWatch();
     mediaBusy = false;
     button.textContent = label;
-    updateMediaState();
+    await refreshSetMedia();
   }
 }
 
@@ -1132,6 +1153,8 @@ function updateSetInfo() {
     $("setInfo").textContent = "";
     $("setSummary").innerHTML = "No tracks yet. Fill step 1 and hit Draft with LLM.";
     $("setPublishInfo").textContent = "Nothing rendered yet.";
+    showSetChecks("setReviewChecks", []);
+    showSetChecks("setPublishChecks", []);
     updateSteps(0, 0, 0, false);
     updateMediaState();
     return;
@@ -1141,26 +1164,61 @@ function updateSetInfo() {
   const done = rendered.reduce((sum, s) => sum + Number(s.audio_seconds), 0);
   const planned = songs.reduce((sum, s) => sum + Number(s.target_seconds || 0), 0);
   const busy = songs.some(isBusy);
+  const queued = songs.filter((s) => s.job && s.job.status === "queued").length;
+  const failed = songs.filter((s) => s.status === "error" || (s.job && s.job.status === "error"));
+  const cancelled = songs.filter((s) => s.status === "cancelled" || (s.job && s.job.status === "cancelled"));
+  const changed = rendered.filter((s) => s.needs_rerender);
+  const short = rendered.filter((s) => Number(s.target_seconds) > 0 && Number(s.audio_seconds) < Number(s.target_seconds) * .8);
+  const empty = songs.filter((s) => !String(s.style || "").trim() && !String(s.lyrics || "").trim());
+  const complete = songs.length > 0 && rendered.length === songs.length && !changed.length;
   $("setInfo").textContent = `${songs.length} tracks · ${rendered.length} rendered`;
-  const auto = (setData.duration_mode || "auto") === "auto";
-  const overshoot = auto && planned > 0 && done > planned * 1.4
-    ? `<div class="live">auto sizing came out ${fmtDur(done)} against a ${fmtDur(planned)} estimate: `
-      + "each track follows its planned score (the planner writes full songs, not "
-      + "fragments of the set length). Use fixed mode to hold the set length.</div>"
-    : "";
+  const completedTimes = rendered.map((s) => Number(s.job && s.job.generation_seconds))
+    .filter((n) => n > 0).sort((a, b) => a - b);
+  const typical = completedTimes.length ? completedTimes[Math.floor(completedTimes.length / 2)] : 0;
+  const active = songs.find((s) => s.job && isBusy(s) && s.job.status !== "queued");
+  const remaining = queued * typical + (active ? Number(active.job.eta_total_seconds) || typical : 0);
+  const queueLine = busy ? `<div class="live">${queued} queued in this set`
+    + (active ? ` &middot; working on track ${active.order}` : "")
+    + (typical ? ` &middot; roughly ${fmtDur(remaining)} left` : " &middot; estimate available after the first track")
+    + `</div>` : "";
   $("setSummary").innerHTML = songs.length
     ? `${songs.length} tracks &middot; estimated ${fmtDur(planned)} &middot; rendered `
       + `${rendered.length}/${songs.length} (${fmtDur(done)})`
       + ((setData.translation_language || "").trim()
           ? ` &middot; titles \u2192 ${esc(setData.translation_language.trim())}` : "")
-      + liveLine(songs) + overshoot
+      + liveLine(songs) + queueLine
     : "No tracks yet. Fill step 1 and hit Draft with LLM.";
+  const reviewChecks = [];
+  const requested = Number(setData.target_minutes || 0) * 60;
+  if (requested && planned && Math.abs(planned - requested) > requested * .1)
+    reviewChecks.push(`Track estimates total ${fmtDur(planned)}; the set request is ${fmtDur(requested)}.`);
+  if (empty.length) reviewChecks.push(`${empty.length} track(s) have no style or lyrics and will be skipped.`);
+  if (changed.length) reviewChecks.push(`${changed.length} rendered track(s) have edited style or lyrics; re-render them to apply the edits.`);
+  if (short.length) reviewChecks.push(`${short.length} rendered track(s) are more than 20% shorter than their estimates.`);
+  if (failed.length) reviewChecks.push(`${failed.length} track(s) failed. Open them for the error and re-render.`);
+  if (cancelled.length) reviewChecks.push(`${cancelled.length} track(s) were cancelled.`);
+  if (complete && planned && (done < planned * .8 || done > planned * 1.2))
+    reviewChecks.push(`Finished audio is ${fmtDur(done)} against ${fmtDur(planned)} planned. Track estimates are not a guaranteed final duration.`);
+  showSetChecks("setReviewChecks", reviewChecks);
   $("setPublishInfo").textContent = rendered.length
     ? `${rendered.length}/${songs.length} rendered · ${fmtDur(done)} total`
-      + (rendered.length < songs.length ? " — render the rest first" : " — ready to join")
+      + (complete ? " — ready to join" : " — review the remaining tracks")
     : "Nothing rendered yet. Finish step 2 first.";
+  const publishChecks = [];
+  if (songs.length && !complete) publishChecks.push("Finish or review every track before publishing.");
+  if (complete && !setData.image) publishChecks.push("Upload a background image to make the video.");
+  if (complete && !setData.concat) publishChecks.push("Join the tracks to create the set audio.");
+  if (complete && setData.image && !setData.video) publishChecks.push("Make the video with the current background image.");
+  if (songs.length && songs.length < 3) publishChecks.push("YouTube chapters need at least three timestamps.");
+  if (rendered.some((s) => Number(s.audio_seconds) < 10)) publishChecks.push("A chapter shorter than 10 seconds may not appear on YouTube.");
+  showSetChecks("setPublishChecks", publishChecks);
   updateSteps(songs.length, rendered.length, songs.length, busy);
   updateMediaState();
+}
+function showSetChecks(id, messages) {
+  const box = $(id);
+  box.textContent = messages.join("\n");
+  box.classList.toggle("on", messages.length > 0);
 }
 function updateSteps(total, rendered, all, busy) {
   const step = total === 0 ? 1 : (rendered < all ? 2 : 3);
@@ -1191,6 +1249,10 @@ function songStatus(song) {
   const job = song.job;
   if (job && !["done", "error", "cancelled"].includes(job.status)) {
     const bits = [job.stage || job.status];
+    if (job.status === "queued") {
+      const pending = (setData && setData.songs || []).filter((s) => s.job && s.job.status === "queued");
+      bits.push(`${pending.findIndex((s) => s.id === song.id) + 1}/${pending.length} queued in this set`);
+    }
     if (job.sub_progress && job.sub_progress.total) {
       bits.push(`${job.sub_progress.completed}/${job.sub_progress.total} ${job.sub_progress.unit || ""}`.trim());
     }
@@ -1203,8 +1265,15 @@ function songStatus(song) {
     // the header keeps a short label; the numbers go on their own line
     return { cls: "", text: shortStage(job), detail: bits.join(" \u00b7 ") };
   }
-  if (song.status === "error" || (job && job.status === "error")) return { cls: "error", text: "error", detail: "" };
-  if (song.audio_seconds) return { cls: "done", text: fmtDur(song.audio_seconds), detail: "" };
+  if (song.status === "error" || (job && job.status === "error"))
+    return { cls: "error", text: "error", detail: (job && job.error) || song.notes || "Render failed" };
+  if (song.audio_seconds) {
+    const target = Number(song.target_seconds || 0);
+    if (song.needs_rerender) return { cls: "warn", text: "edited", detail: "Style or lyrics changed after rendering. Re-render to apply the edits." };
+    if (target && Number(song.audio_seconds) < target * .8)
+      return { cls: "warn", text: fmtDur(song.audio_seconds), detail: `Shorter than the ${fmtDur(target)} estimate.` };
+    return { cls: "done", text: fmtDur(song.audio_seconds), detail: "" };
+  }
   if (song.status === "cancelled") return { cls: "", text: "cancelled", detail: "" };
   if (song.status === "queued" || (job && job.status === "queued")) return { cls: "", text: "queued", detail: "" };
   return { cls: "", text: "not rendered", detail: "" };
@@ -1237,11 +1306,11 @@ function trackHtml(song) {
     : "";
   const renderLabel = hasAudio ? "Re-render" : "Render";
   return `
-  <div class="track" data-id="${esc(song.id)}">
+  <div class="track ${status.cls === "warn" || status.cls === "error" ? "attention" : ""}" data-id="${esc(song.id)}">
     <div class="thead">
       <span class="torder">${song.order}</span>
       <input type="text" class="ttitle" value="${esc(song.title)}" placeholder="Title">
-      <span class="test">~${esc(song.target_seconds)}s</span>
+      <span class="test" title="estimated / rendered duration">${fmtDur(Number(song.target_seconds) || 0)}${song.audio_seconds ? " / " + fmtDur(Number(song.audio_seconds)) : ""}</span>
       <span class="tstatus ${status.cls}">${esc(status.text)}</span>
       <button class="ghost" data-act="translate" title="${lang ? "Translate this title into " + esc(lang) : "Set the translation language in step 1 first"}" ${lang ? "" : "disabled"}>${esc(langCode)}</button>
       <button class="ghost danger" data-act="stop" title="Cancel this render" style="display:none">Stop</button>
@@ -1270,6 +1339,7 @@ function trackHtml(song) {
         <button class="ghost" data-act="apply" ${translation ? "" : "disabled"}>Apply to title</button>
         <button class="ghost" data-act="gen">${hasAudio ? "Re-render this track" : "Render this track"}</button>
         <button class="ghost" data-act="download" ${hasAudio ? "" : "disabled"}>Download audio</button>
+        <button class="ghost" data-act="downloadmp3" ${hasAudio ? "" : "disabled"}>Download MP3</button>
       </div>
     </div>
   </div>`;
@@ -1308,6 +1378,7 @@ function updateStatuses() {
     const song = (setData.songs || []).find((s) => s.id === card.dataset.id);
     if (!song) return;
     const status = songStatus(song);
+    card.classList.toggle("attention", status.cls === "warn" || status.cls === "error");
     const el = card.querySelector(".tstatus");
     el.className = "tstatus " + status.cls;
     el.textContent = status.text;
@@ -1356,11 +1427,13 @@ function onTrackInput(event) {
   if (!song) return;
   const cls = event.target.className;
   if (cls.includes("ttitle")) song.title = event.target.value;
-  else if (cls.includes("tstyle")) song.style = event.target.value;
-  else if (cls.includes("tlyrics")) song.lyrics = event.target.value;
+  else if (cls.includes("tstyle")) { song.style = event.target.value; if (song.audio_seconds) song.needs_rerender = true; }
+  else if (cls.includes("tlyrics")) { song.lyrics = event.target.value; if (song.audio_seconds) song.needs_rerender = true; }
   else if (cls.includes("ttrans")) song.title_translation = event.target.value;
   else if (cls.includes("tsecs")) song.target_seconds = Number(event.target.value) || song.target_seconds;
   else if (cls.includes("tseed")) song.seed = event.target.value === "" ? null : Number(event.target.value);
+  updateStatuses();
+  updateSetInfo();
   queueSave();
 }
 
@@ -1377,6 +1450,7 @@ function onTrackClick(event) {
     else if (act === "gen") renderOne(song);
     else if (act === "stop") stopJobs([song.id]);
     else if (act === "download") downloadSong(song);
+    else if (act === "downloadmp3") downloadSong(song, "mp3");
     else if (act === "translate") translateTitles([song.id]);
     else if (act === "apply") applyTranslation(song);
     return;
@@ -1408,24 +1482,34 @@ function moveSong(song, delta) {
   if (to < 0 || to >= list.length) return;
   list.splice(to, 0, list.splice(from, 1)[0]);
   reorder();
+  setData.concat = null;
+  setData.video = null;
   renderTracks();
+  updateSetInfo();
   queueSave();
 }
 
 function removeSong(song) {
   setData.songs = setData.songs.filter((s) => s !== song);
   reorder();
+  setData.concat = null;
+  setData.video = null;
   renderTracks();
   updateSetInfo();
+  queueSave();
   if ((setData.songs || []).some((s) => s.job && !["done", "error", "cancelled"].includes(s.job.status))) startSetPoll();
 }
 
-function downloadSong(song) {
+function downloadSong(song, format) {
   if (!song.job_id || !song.audio) { setError("this track has no rendered audio yet"); return; }
+  const suffix = format || (song.audio.split(".").pop() || "wav");
+  const safe = String(song.title || "track").replace(/[^\w\-. ]+/g, "_").trim() || "track";
   const link = document.createElement("a");
-  link.href = `/api/job/${song.job_id}/audio`;
-  link.download = "";
+  // the server converts on demand and caches the result
+  link.href = `/api/job/${song.job_id}/audio?format=${suffix}`;
+  link.download = `${safe}.${suffix}`;
   link.click();
+  if (format === "mp3") toast(`converting "${song.title}" to MP3\u2026`, "");
 }
 
 function queueSave() {
@@ -1452,6 +1536,7 @@ async function saveSet(explicit) {
     });
     updateSetInfo();
     refreshPicker();  // the name and the track counts live in the dropdown
+    updateStatuses();
     if (explicit) setStatus(`saved "${setData.name}"`);
   } catch (e) {
     setError(String(e.message));
@@ -1713,7 +1798,11 @@ function mergeJobs(fresh) {
     song.audio_seconds = other.audio_seconds;
     song.job_id = other.job_id;
     song.seed = other.seed;
+    song.needs_rerender = other.needs_rerender;
   });
+  setData.concat = fresh.concat || null;
+  setData.video = fresh.video || null;
+  setData.image = fresh.image || null;
 }
 
 async function pollSetOnce() {
@@ -1729,7 +1818,7 @@ async function pollSetOnce() {
     updateStatuses();
     updateSetInfo();
     const active = (fresh.songs || []).find(isBusy);
-    if (active) setStatus(`rendering track ${active.order} — ${songStatus(active).text}`);
+    if (active) setStatus(`${active.job && active.job.status === "queued" ? "queued" : "rendering"} track ${active.order} — ${songStatus(active).text}`);
     return !!active;
   } catch (e) {
     // A single failed request must not look like "render finished".
@@ -1740,13 +1829,27 @@ async function pollSetOnce() {
 function startSetPoll() {
   if (setPollTimer) return;
   const tick = async () => {
-    const busy = await pollSetOnce();
+    if (setPollInFlight) return;
+    setPollInFlight = true;
+    let busy;
+    try { busy = await pollSetOnce(); }
+    finally { setPollInFlight = false; }
     if (busy === null || busy) return;
     stopSetPoll();
     refreshPicker();
     updateSetInfo();
-    setStatus("render finished — step 3 is ready");
-    $("stepPublish").scrollIntoView({ behavior: "smooth", block: "start" });
+    const songs = (setData && setData.songs) || [];
+    const failed = songs.filter((s) => s.status === "error" || s.status === "cancelled").length;
+    const missing = songs.filter((s) => !s.audio_seconds).length;
+    const changed = songs.filter((s) => s.needs_rerender).length;
+    if (failed || missing || changed) {
+      const message = `Queue finished: ${failed} failed/cancelled, ${missing} without audio, ${changed} edited since rendering. Review step 2.`;
+      setStatus(message);
+      toast(message, "bad");
+    } else {
+      setStatus("Render finished — step 3 is ready");
+      $("stepPublish").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     // the set file is written a moment after the job ends
     setTimeout(refreshPicker, 1500);
   };
@@ -1793,6 +1896,7 @@ async function concatSet() {
     });
     setData.concat = { file: out.file, bytes: out.bytes, download: out.download };
     updateMediaState();
+    updateSetInfo();
     const joined = `${out.file} · ${fmtDur(out.seconds)} · ${(out.bytes / 1048576).toFixed(1)} MB`;
     setStatus(joined);
     toast(`joined: ${joined}`, "good");
@@ -1803,7 +1907,7 @@ async function concatSet() {
     stopWatch();
     mediaBusy = false;
     $("setConcat").textContent = "Concatenate audio";
-    updateMediaState();
+    await refreshSetMedia();
   }
 }
 
