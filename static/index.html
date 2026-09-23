@@ -348,10 +348,14 @@
         <label for="setPick">Set</label>
         <select id="setPick"></select>
       </div>
-      <div>
-        <label for="setName">Name</label>
-        <input type="text" id="setName" placeholder="Vaporwave Night Drive Vol. 1">
-      </div>
+        <div>
+          <label for="setName">Name</label>
+          <div class="seed-wrap">
+            <input type="text" id="setName" placeholder="Untitled set" readonly>
+            <button class="ghost" id="setNameEdit" title="Edit the set name">Edit</button>
+            <button class="ghost" id="setNameConfirm" style="display:none" title="Save the set name">Confirm</button>
+          </div>
+        </div>
     </div>
     <div class="actions">
       <button class="ghost" id="setNew">New set</button>
@@ -871,6 +875,23 @@ function toast(message, kind) {
 }
 
 const SET_CARDS = ["stepConfig", "stepReview", "stepPublish"];
+let nameEditing = false;
+
+function startNameEdit() {
+  nameEditing = true;
+  $("setName").readOnly = false;
+  $("setNameEdit").style.display = "none";
+  $("setNameConfirm").style.display = "";
+  $("setName").focus();
+  $("setName").select();
+}
+
+function endNameEdit() {
+  nameEditing = false;
+  $("setName").readOnly = true;
+  $("setNameEdit").style.display = "";
+  $("setNameConfirm").style.display = "none";
+}
 
 function foldStep(step, force) {
   const card = $(SET_CARDS[step - 1]);
@@ -901,7 +922,15 @@ function initSets() {
     await saveSet(false);
     await loadSet(next);
   };
-  $("setName").oninput = () => queueSave();
+  $("setName").onkeydown = (event) => {
+    if (event.key === "Enter") { event.preventDefault(); $("setNameConfirm").click(); }
+    if (event.key === "Escape") { endNameEdit(); }
+  };
+  $("setNameEdit").onclick = startNameEdit;
+  $("setNameConfirm").onclick = async () => {
+    await saveSet(true);
+    endNameEdit();
+  };
   $("setMinutes").oninput = () => queueSave();
   $("setTrackCount").oninput = () => queueSave();
   $("setLanguage").oninput = () => queueSave();
@@ -1520,7 +1549,8 @@ function queueSave() {
 async function saveSet(explicit) {
   if (!setData || !setId) return;
   clearTimeout(setSaveTimer);
-  setData.name = $("setName").value.trim() || "Untitled set";
+  // the name only changes through Edit -> Confirm
+  if (nameEditing) setData.name = $("setName").value.trim() || "Untitled set";
   setData.brief = $("setBrief").value;
   setData.background = $("setBackground").value;
   setData.translation_language = $("setTranslationLang").value.trim();
@@ -1546,19 +1576,22 @@ async function saveSet(explicit) {
 async function newSet() {
   setError("");
   try {
-    const created = await jfetch("/api/sets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: $("setName").value.trim() || "Untitled set",
-        target_minutes: Number($("setMinutes").value) || 60,
-        brief: $("setBrief").value,
-      }),
-    });
-    setId = created.id;
-    await refreshPicker();
-    await loadSet(created.id);
-    setStatus("new set created");
+      const created = await jfetch("/api/sets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          // a new set starts unnamed; the field is cleared for you to type into
+          name: "",
+          target_minutes: Number($("setMinutes").value) || 60,
+          brief: $("setBrief").value,
+        }),
+      });
+      setId = created.id;
+      await refreshPicker();
+      await loadSet(created.id);
+      $("setName").value = "";
+      startNameEdit();
+      setStatus("new set created — type a name and confirm");
   } catch (e) {
     setError(String(e.message));
   }
@@ -1696,6 +1729,7 @@ async function draftSet(append) {
       }),
     });
     $("setName").value = setData.name || "";
+    endNameEdit();
     $("setBackground").value = setData.background || "";
     renderTracks();
     updateSetInfo();
