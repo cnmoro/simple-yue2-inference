@@ -852,6 +852,7 @@ class SetDraft(BaseModel):
     track_count: int = Field(default=12, ge=1, le=40)
     language: str = Field(default="English", max_length=60)
     append: bool = False
+    instrumental: bool = False
 
 
 class SetTranslate(BaseModel):
@@ -995,6 +996,7 @@ def api_set_draft(set_id: str, req: SetDraft):
         req.track_count,
         req.language,
         existing=existing if req.append else None,
+        instrumental=req.instrumental,
     )
     try:
         content = sets.openrouter_chat(req.api_key, req.model, messages, max_tokens=12000)
@@ -1020,6 +1022,7 @@ def api_set_draft(set_id: str, req: SetDraft):
     data["target_minutes"] = req.target_minutes
     data["lyrics_language"] = req.language
     data["track_count"] = req.track_count
+    data["instrumental"] = req.instrumental
     data["model"] = req.model
     if sets.audio_signature(songs) != old_signature:
         # the derived audio/video belong to the previous tracklist
@@ -1151,6 +1154,39 @@ def _converted_track(job_id: str, source: Path, fmt: str) -> Path:
     finally:
         CONVERT_LOCK.release()
     return target
+
+
+PEAKS_CACHE: dict = {}
+
+
+@app.get("/api/job/{job_id}/peaks")
+def api_job_peaks(job_id: str, buckets: int = 64):
+    """Waveform peaks for the UI, computed server side so the browser does not decode audio."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", job_id):
+        raise HTTPException(422, "bad job id")
+    buckets = max(16, min(256, buckets))
+    path = sets.resolve_audio_file(job_id)
+    if path is None:
+        raise HTTPException(404, "no audio for this job")
+    key = (job_id, buckets)
+    if key in PEAKS_CACHE:
+        return {"peaks": PEAKS_CACHE[key]}
+    try:
+        import numpy as np
+
+        data, _ = sf.read(str(path), dtype="float32", always_2d=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"could not read the audio: {exc}") from exc
+    mono = data.mean(axis=1) if data.ndim > 1 else data
+    edges = np.linspace(0, len(mono), buckets + 1).astype(int)
+    peaks = []
+    for index in range(buckets):
+        chunk = mono[edges[index]:edges[index + 1]]
+        peaks.append(float(np.abs(chunk).max()) if chunk.size else 0.0)
+    top = max(peaks) or 1.0
+    normalized = [round(min(1.0, value / top * 1.1), 3) for value in peaks]
+    PEAKS_CACHE[key] = normalized
+    return {"peaks": normalized}
 
 
 @app.get("/api/sets/{set_id}/export")

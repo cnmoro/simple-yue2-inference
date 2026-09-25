@@ -108,6 +108,7 @@ def normalize(data: dict) -> dict:
     data.setdefault("translation_language", "")
     data.setdefault("lyrics_language", "English")
     data.setdefault("track_count", 12)
+    data.setdefault("instrumental", False)
     data.setdefault("target_minutes", 60)
     data.setdefault("created", time.time())
     if data.get("duration_mode") not in ("auto", "fixed"):
@@ -363,9 +364,23 @@ def build_set_messages(
     track_count: int,
     language: str = "English",
     existing: list[dict] | None = None,
+    instrumental: bool = False,
 ):
     total = int(round(float(target_minutes) * 60))
     adding = bool(existing)
+    if instrumental:
+        lyrics_rule = (
+            "- This is an instrumental set: there are no vocals anywhere. The lyrics field of every "
+            'song must be exactly "[Instrumental]" and nothing else. Never invent verses, choruses, '
+            "la la lines or placeholder words. Put every musical description in style.\n"
+        )
+    else:
+        lyrics_rule = (
+            "- lyrics: use [Verse], [Chorus], [Bridge] and [Instrumental] section markers. Scale the "
+            "length to target_seconds, about one short line per three seconds. A track with no vocals "
+            'must have exactly "[Instrumental]" as its lyrics — never leave it empty and never invent '
+            "words for it; describe the instruments in style instead.\n"
+        )
     system = (
         "You are a music curator and lyricist assembling one continuous set for a YouTube upload.\n"
         "Reply with strict JSON only: no prose, no markdown, no code fences.\n"
@@ -375,14 +390,12 @@ def build_set_messages(
         f"The target_seconds values must sum to about {total} seconds (within 5% of it), and each "
         f"value must be between {MIN_TRACK_SECONDS} and {MAX_TRACK_SECONDS}.\n"
         "Rules:\n"
-        f"- Write titles, styles and lyrics in {language}.\n"
+        f"- Write titles and styles in {language}.\n"
         "- style: one single line covering genre, era, mood, instruments, vocal type and BPM. "
         "Keep the set coherent (neighbouring tracks share tempo range and instrumentation) while "
         "making each track clearly distinguishable.\n"
-        "- lyrics: use [Verse], [Chorus], [Bridge] and [Instrumental] section markers. Scale the "
-        "length to target_seconds, about one short line per three seconds. For a purely "
-        "instrumental track use an empty string and describe the instruments in style.\n"
-        "- background: ONE text-to-image prompt for the whole set, describing a single still image "
+        + lyrics_rule
+        + "- background: ONE text-to-image prompt for the whole set, describing a single still image "
         "that will sit behind every track of the video. Describe the shared aesthetic, framing and "
         "palette in detail, 16:9, with no text and no watermark. Do not describe individual tracks.\n"
         "- Never reuse a title inside the set."
