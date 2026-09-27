@@ -236,15 +236,20 @@ def resolve_audio_file(job_id) -> Path | None:
     """The rendered file for a job, whether or not the job is still in memory.
 
     meta.json records the *URL* under "audio", so never trust that field as a
-    filename: the file on disk is the source of truth.
+    filename: the file on disk is the source of truth. An on-demand MP3 is cached
+    beside the render, so prefer the lossless one when both exist.
     """
     if not job_id:
         return None
     folder = OUTPUTS / str(job_id)
     if not folder.is_dir():
         return None
-    found = sorted(path for path in folder.glob("song.*") if path.is_file())
-    return found[0] if found else None
+    found = [path for path in folder.glob("song.*") if path.is_file()]
+    if not found:
+        return None
+    order = {".wav": 0, ".flac": 1, ".mp3": 2}
+    found.sort(key=lambda path: (order.get(path.suffix.lower(), 9), path.name))
+    return found[0]
 
 
 def audio_path(song: dict) -> Path:
