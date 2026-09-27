@@ -796,8 +796,14 @@ def api_cancel(job_id: str):
     return {"ok": True}
 
 
+def _safe_name(value: str | None, fallback: str) -> str:
+    """A filename the browser and the filesystem both accept, keeping unicode titles."""
+    cleaned = re.sub(r"[^\w\-. ]+", "_", str(value or ""), flags=re.UNICODE).strip(" ._-")
+    return (cleaned[:120] or fallback).strip() or fallback
+
+
 @app.get("/api/job/{job_id}/audio")
-def api_audio(job_id: str, inline: bool = False, format: str | None = None):
+def api_audio(job_id: str, inline: bool = False, format: str | None = None, name: str | None = None):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", job_id):
         raise HTTPException(422, "bad job id")
     path = sets.resolve_audio_file(job_id)
@@ -808,10 +814,11 @@ def api_audio(job_id: str, inline: bool = False, format: str | None = None):
             raise HTTPException(422, "format must be wav, flac or mp3")
         if path.suffix.lstrip(".").lower() != format:
             path = _converted_track(job_id, path, format)
+    suffix = path.suffix.lstrip(".")
     if inline:
         # No filename: omit Content-Disposition so the browser plays it in place.
         return FileResponse(path)
-    return FileResponse(path, filename=f"yue2-{job_id}.{path.suffix.lstrip('.')}")
+    return FileResponse(path, filename=f"{_safe_name(name, f'yue2-{job_id}')}.{suffix}")
 
 
 @app.get("/api/history")
@@ -1134,7 +1141,9 @@ def api_set_audio(set_id: str):
     for name in ("set.mp3", "set.wav"):
         path = sets.SETS_DIR / set_id / name
         if path.is_file():
-            return FileResponse(path, filename=f"{(data.get('name') or 'set').strip()}{path.suffix}")
+            return FileResponse(
+                path, filename=f"{_safe_name(data.get('name'), 'set')}{path.suffix}"
+            )
     raise HTTPException(404, "no concatenated file yet")
 
 
@@ -1256,10 +1265,11 @@ def api_set_video_file(set_id: str, inline: bool = False):
     path = sets.video_path(set_id)
     if path is None:
         raise HTTPException(404, "no video yet")
-    name = (data.get("name") or "set").strip() or "set"
     if inline:
         return FileResponse(path, media_type="video/mp4")
-    return FileResponse(path, media_type="video/mp4", filename=f"{name}.mp4")
+    return FileResponse(
+        path, media_type="video/mp4", filename=f"{_safe_name(data.get('name'), 'set')}.mp4"
+    )
 
 
 def main():

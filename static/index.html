@@ -1753,8 +1753,8 @@ function downloadSong(song, format) {
   const suffix = format || (song.audio.split(".").pop() || "wav");
   const safe = String(song.title || "track").replace(/[^\w\-. ]+/g, "_").trim() || "track";
   const link = document.createElement("a");
-  // the server converts on demand and caches the result
-  link.href = `/api/job/${song.job_id}/audio?format=${suffix}`;
+  // the server converts on demand and names the file from the title
+  link.href = `/api/job/${song.job_id}/audio?format=${suffix}&name=${encodeURIComponent(safe)}`;
   link.download = `${safe}.${suffix}`;
   link.click();
   if (format === "mp3") toast(`converting "${song.title}" to MP3\u2026`, "");
