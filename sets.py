@@ -715,7 +715,7 @@ def video_path(set_id: str) -> Path | None:
 def clear_renders(set_id: str) -> list[str]:
     """Drop the derived files; they belong to a tracklist that no longer exists."""
     removed = []
-    for name in ("set.mp3", "set.wav", "set.mp4", "concat.txt"):
+    for name in ("set.mp3", "set.wav", "set.mp4", "tracks-mp3.zip", "concat.txt"):
         path = folder(set_id) / name
         if path.is_file():
             path.unlink(missing_ok=True)

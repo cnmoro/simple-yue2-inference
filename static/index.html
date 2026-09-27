@@ -494,6 +494,7 @@
       </div>
       <div class="actions">
         <button class="ghost" id="setDownload" style="display:none">Download audio</button>
+        <button class="ghost" id="setDownloadMp3s" style="display:none">Download all MP3s (.zip)</button>
         <button class="ghost" id="setDownloadVideo" style="display:none">Download video</button>
       </div>
 
@@ -982,6 +983,7 @@ function initSets() {
   $("setExportMd").onclick = downloadMarkdown;
   $("setDownload").onclick = () => window.open(`/api/sets/${setId}/audio`, "_blank");
   $("setDownloadVideo").onclick = () => window.open(`/api/sets/${setId}/video-file`, "_blank");
+  $("setDownloadMp3s").onclick = downloadAllMp3s;
   $("setImage").onchange = uploadImage;
   $("setVideo").onclick = makeVideo;
   $("setCopyBg").onclick = () => {
@@ -1118,9 +1120,22 @@ function updateMediaState() {
   const audioButton = $("setDownload");
   audioButton.style.display = concat ? "" : "none";
   if (concat) audioButton.textContent = `Download audio (${(concat.bytes / 1048576).toFixed(1)} MB)`;
+  // every track converted and zipped, without joining them
+  const mp3Button = $("setDownloadMp3s");
+  mp3Button.style.display = canConcat ? "" : "none";
   const videoButton = $("setDownloadVideo");
   videoButton.style.display = video ? "" : "none";
   if (video) videoButton.textContent = `Download video (${(video.bytes / 1048576).toFixed(1)} MB)`;
+}
+
+function downloadAllMp3s() {
+  if (!setId || !setData) return;
+  const pending = (setData.songs || []).filter((song) => !song.audio_seconds).length;
+  if (pending) { setError(`${pending} track(s) still without audio`); return; }
+  // the first call converts every track, so it can take a little while
+  toast("preparing the zip \u2014 the first call converts every track\u2026", "");
+  setStatus("building the MP3 zip with ffmpeg\u2026");
+  window.open(`/api/sets/${setId}/mp3s`, "_blank");
 }
 
 async function refreshSetMedia() {

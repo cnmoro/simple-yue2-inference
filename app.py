@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1152,8 +1153,9 @@ def _converted_track(job_id: str, source: Path, fmt: str) -> Path:
     target = source.with_suffix("." + fmt)
     if target.is_file():
         return target
-    if not CONVERT_LOCK.acquire(blocking=False):
-        raise HTTPException(409, "another conversion is running, try again in a moment")
+    # wait for a conversion already in flight instead of failing the click
+    if not CONVERT_LOCK.acquire(timeout=180):
+        raise HTTPException(409, "a conversion is taking too long, try again in a moment")
     try:
         if not target.is_file():
             if fmt == "mp3":
@@ -1196,6 +1198,47 @@ def api_job_peaks(job_id: str, buckets: int = 64):
     normalized = [round(min(1.0, value / top * 1.1), 3) for value in peaks]
     PEAKS_CACHE[key] = normalized
     return {"peaks": normalized}
+
+
+@app.get("/api/sets/{set_id}/mp3s")
+def api_set_mp3s(set_id: str):
+    """Every rendered track as 320 kbps MP3, zipped, without joining them."""
+    data = _load_set_or_404(set_id)
+    songs = [song for song in data["songs"] if song.get("audio_seconds") and song.get("job_id")]
+    if not songs:
+        raise HTTPException(422, "no rendered tracks yet")
+    if len(songs) != len(data["songs"]):
+        raise HTTPException(422, "render every track first")
+    folder = sets.SETS_DIR / set_id
+    folder.mkdir(parents=True, exist_ok=True)
+    archive = folder / "tracks-mp3.zip"
+    if not archive.is_file():
+        if not CONVERT_LOCK.acquire(timeout=300):
+            raise HTTPException(409, "another conversion is taking too long")
+        try:
+            if not archive.is_file():
+                partial = folder / "tracks-mp3.part.zip"
+                try:
+                    with zipfile.ZipFile(partial, "w", zipfile.ZIP_STORED) as bundle:
+                        for index, song in enumerate(songs, start=1):
+                            source = sets.resolve_audio_file(song["job_id"])
+                            if source is None:
+                                continue
+                            track = source if source.suffix.lower() == ".mp3" else _converted_track(
+                                song["job_id"], source, "mp3"
+                            )
+                            label = _safe_name(song.get("title"), song["id"])
+                            bundle.write(track, arcname=f"{index:02d} {label}.mp3")
+                    partial.replace(archive)
+                finally:
+                    partial.unlink(missing_ok=True)
+        finally:
+            CONVERT_LOCK.release()
+    return FileResponse(
+        archive,
+        media_type="application/zip",
+        filename=f"{_safe_name(data.get('name'), 'set')} - MP3.zip",
+    )
 
 
 @app.get("/api/sets/{set_id}/export")
